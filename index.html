@@ -871,71 +871,108 @@ const remotePlayers = new Map(); // id -> { x, y, face, name, mv, t, lastSeen }
 let wsReconnectT = 0;
 
 function connectToServer() {
-  if (!WS_URL || WS_URL.includes('SENIN-RENDER-URLIN')) {
-    console.log('WebSocket URL ayarlanmamış, tek oyunculu mod.');
-    return;
-  }
+  if (!WS_URL || WS_URL.includes('SENIN-RENDER-URLIN')) return;
   try {
     ws = new WebSocket(WS_URL);
-    ws.onopen = () => {
-      wsConnected = true;
-      console.log('✅ Sunucuya bağlandı');
-      msg('Çok oyunculu sunucuya bağlandın!', '#86efac');
-    };
-    ws.onmessage = (ev) => {
-      let data;
-      try { data = JSON.parse(ev.data); } catch (err) { return; }
-      if (data.type === 'welcome') {
-        wsId = data.id;
-        data.players.forEach(pl => {
-          if (pl.id === wsId) return;
-          remotePlayers.set(pl.id, {
-            x: pl.x, y: pl.y, face: pl.face || 1,
-            name: pl.name || 'Oyuncu', lvl: pl.lvl || 1,
-            cls: pl.cls || 'warrior', king: pl.king || 0,
-            hp: pl.hp || 100, maxhp: pl.maxhp || 100,
-            mv: false, t: 0, lastSeen: performance.now()
-          });
-        });
-      } else if (data.type === 'player') {
-        if (data.id === wsId) return;
-        const existing = remotePlayers.get(data.id) || { t: 0, mv: false };
-        existing.x = data.x; existing.y = data.y; existing.face = data.face || 1;
-        existing.name = data.name || existing.name || 'Oyuncu';
-        existing.lvl = data.lvl || existing.lvl || 1;
-        existing.cls = data.cls || existing.cls || 'warrior';
-        existing.king = data.king !== undefined ? data.king : (existing.king || 0);
-        existing.hp = data.hp !== undefined ? data.hp : (existing.hp || 100);
-        existing.maxhp = data.maxhp !== undefined ? data.maxhp : (existing.maxhp || 100);
-        existing.lastSeen = performance.now();
-        remotePlayers.set(data.id, existing);
-      } else if (data.type === 'leave') {
-        const rp = remotePlayers.get(data.id);
-        if (rp) msg((rp.name || 'Bir oyuncu') + ' oyundan ayrıldı.', '#9ca3af');
-        remotePlayers.delete(data.id);
-      } else if (data.type === 'chat') {
-        say(data.name || 'Oyuncu', data.text, '#7dd3fc', data.lvl || 1);
-      } else if (data.type === 'attack') {
-        if (data.x !== undefined && data.y !== undefined) {
-          fx.push({ k: 'ring', x: data.x, y: data.y, r: 5, max: 40, c: '#ff8080' });
-        }
-      } else if (data.type === 'stoneHit') {
-        const localStone = stones[data.stoneIdx];
-        if (localStone && !localStone.dead) {
-          localStone.hp -= data.dmg;
-          localStone.act = 12;
-          floatText(localStone.x + R(-8, 8), localStone.y - 100, data.dmg, '#ffd34d');
-          burst(localStone.x, localStone.y - 30, 6, '#c084fc', 70, .4, 2);
-          if (localStone.hp <= 0) kill(localStone);
-        }
-      } else if (data.type === 'stoneDead') {
-        const localStone = stones[data.stoneIdx];
-        if (localStone && !localStone.dead) {
-          localStone.hp = 0;
-          kill(localStone);
-        }
-      }
-    };
+    ws.onopen = onWsOpen;
+    ws.onmessage = onWsMessage;
+    ws.onclose = onWsClose;
+    ws.onerror = onWsError;
+  } catch (e) {
+    console.log('Bağlantı kurulamadı:', e);
+  }
+}
+
+function onWsOpen() {
+  wsConnected = true;
+  console.log('✅ Sunucuya bağlandı');
+  msg('Çok oyunculu sunucuya bağlandın!', '#86efac');
+}
+
+function onWsClose() {
+  wsConnected = false;
+  console.log('❌ Bağlantı koptu');
+  wsReconnectT = 3;
+}
+
+function onWsError(e) {
+  console.log('WS hata:', e);
+}
+
+function onWsMessage(ev) {
+  let data;
+  try { data = JSON.parse(ev.data); } catch (err) { return; }
+  
+  if (data.type === 'welcome') {
+    wsId = data.id;
+    data.players.forEach(pl => {
+      if (pl.id === wsId) return;
+      remotePlayers.set(pl.id, {
+        x: pl.x, y: pl.y, face: pl.face || 1,
+        name: pl.name || 'Oyuncu', lvl: pl.lvl || 1,
+        cls: pl.cls || 'warrior', king: pl.king || 0,
+        hp: pl.hp || 100, maxhp: pl.maxhp || 100,
+        mv: false, t: 0, lastSeen: performance.now()
+      });
+    });
+    return;
+  }
+  
+  if (data.type === 'player') {
+    if (data.id === wsId) return;
+    const existing = remotePlayers.get(data.id) || { t: 0, mv: false };
+    existing.x = data.x; existing.y = data.y; existing.face = data.face || 1;
+    existing.name = data.name || existing.name || 'Oyuncu';
+    existing.lvl = data.lvl || existing.lvl || 1;
+    existing.cls = data.cls || existing.cls || 'warrior';
+    existing.king = data.king !== undefined ? data.king : (existing.king || 0);
+    existing.hp = data.hp !== undefined ? data.hp : (existing.hp || 100);
+    existing.maxhp = data.maxhp !== undefined ? data.maxhp : (existing.maxhp || 100);
+    existing.lastSeen = performance.now();
+    remotePlayers.set(data.id, existing);
+    return;
+  }
+  
+  if (data.type === 'leave') {
+    const rp = remotePlayers.get(data.id);
+    if (rp) msg((rp.name || 'Bir oyuncu') + ' oyundan ayrıldı.', '#9ca3af');
+    remotePlayers.delete(data.id);
+    return;
+  }
+  
+  if (data.type === 'chat') {
+    say(data.name || 'Oyuncu', data.text, '#7dd3fc', data.lvl || 1);
+    return;
+  }
+  
+  if (data.type === 'attack') {
+    if (data.x !== undefined && data.y !== undefined) {
+      fx.push({ k: 'ring', x: data.x, y: data.y, r: 5, max: 40, c: '#ff8080' });
+    }
+    return;
+  }
+  
+  if (data.type === 'stoneHit') {
+    const localStone = stones[data.stoneIdx];
+    if (localStone && !localStone.dead) {
+      localStone.hp -= data.dmg;
+      localStone.act = 12;
+      floatText(localStone.x + R(-8, 8), localStone.y - 100, data.dmg, '#ffd34d');
+      burst(localStone.x, localStone.y - 30, 6, '#c084fc', 70, .4, 2);
+      if (localStone.hp <= 0) kill(localStone);
+    }
+    return;
+  }
+  
+  if (data.type === 'stoneDead') {
+    const localStone = stones[data.stoneIdx];
+    if (localStone && !localStone.dead) {
+      localStone.hp = 0;
+      kill(localStone);
+    }
+    return;
+  }
+}
     ws.onclose = () => {
       wsConnected = false;
       console.log('❌ Bağlantı koptu');
