@@ -51,8 +51,8 @@
   <div id="help">
     <b>Tıkla</b> yürümek için (veya WASD / Ok tuşları) &middot; <b>Tıkla</b> canavarlara, Metin Taşlarına, NPC ve düşen eşyalara<br>
     <b>1-4</b> Yetenekler &middot; <b>5</b> HP İksiri &middot; <b>6</b> MP İksiri &middot; <b>7</b> Işınlanma Parşömeni &middot; <b>Z</b> Yerden Eşya Topla<br>
-    <b>I</b> Envanter &middot; <b>C</b> Karakter &middot; <b>K</b> Yetenekler (Ustalık 20) &middot; <b>N</b> Mini Harita &middot; <b>V</b> Sesli Sohbet &middot; <b>Enter</b> Sohbet &middot; <b>ESC</b> Ayarlar<br>
-    Demircide eşyalarını +9'a kadar basabilirsin. İlerlemen otomatik kaydedilir.
+    <b>I</b> Envanter &middot; <b>C</b> Karakter &middot; <b>K</b> Yetenekler &middot; <b>G</b> Günlük Görevler &middot; <b>N</b> Mini Harita &middot; <b>V</b> Sesli Sohbet &middot; <b>Enter</b> Sohbet &middot; <b>ESC</b> Ayarlar<br>
+    Demircide eşyalarını +9'a bas veya 3 aynı item'ı birleştir. Zindanlara git! İlerlemen otomatik kaydedilir.
   </div>
 </div>
 
@@ -152,6 +152,8 @@ const SFX = {
   micOff: () => { tone(660, .1, 'sine', .05); tone(440, .14, 'sine', .05, 0, .08); },
   voiceCmd: () => { tone(1200, .06, 'square', .04); tone(1600, .08, 'square', .04, 0, .05); },
   mastery: () => { [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, .35, 'triangle', .09, 0, i * .1)); noise(.4, .06, .5); },
+  portal: () => { tone(330, .3, 'sine', .06, 600); tone(660, .4, 'sine', .05, 800, .15); },
+  dungeon: () => { [220, 330, 440, 660].forEach((f, i) => tone(f, .5, 'triangle', .07, 0, i * .15)); },
 };
 
 /* ---------- Ambient wind + birds + crickets ---------- */
@@ -862,12 +864,21 @@ const BLD = [
 ];
 const LAMPS = [[-110, -200], [110, -200], [-110, 200], [110, 200], [-240, 0], [240, 0]].map(a => ({ x: C.x + a[0], y: C.y + a[1] }));
 
+// ============================================================ CRAFT + DUNGEON + DAILY
+let smithTab = 'upgrade';
+let dungeonState = null;
+const DUNGEONS = [
+  { id: 0, name: 'Yeni Başlayanlar Mağarası', icon: '🗡️', tier: 1, portalX: C.x + 2200, portalY: C.y, portalR: 60, bossLvl: 15, mobCount: 12, reward: { gold: 3000, xp: 600 }, color: '#86efac' },
+  { id: 1, name: 'Kanlı Kule', icon: '⚔️', tier: 3, portalX: C.x - 2200, portalY: C.y, portalR: 70, bossLvl: 30, mobCount: 22, reward: { gold: 15000, xp: 4500 }, color: '#f97316' },
+  { id: 2, name: 'Ejderha Yuvası', icon: '🐉', tier: 5, portalX: C.x, portalY: C.y + 2200, portalR: 80, bossLvl: 50, mobCount: 35, reward: { gold: 60000, xp: 22000 }, color: '#c084fc' },
+];
+
 // ============================================================ MULTIPLAYER
-const WS_URL = 'wss://efsun-x.onrender.com/ws'; // ← Render URL'in (wss:// ile başlamalı)
+const WS_URL = 'wss://efsun-x.onrender.com/ws';
 let ws = null;
 let wsId = null;
 let wsConnected = false;
-const remotePlayers = new Map(); // id -> { x, y, face, name, lvl, cls, king, hp, maxhp, mv, t, lastSeen, _px, _py }
+const remotePlayers = new Map();
 let wsReconnectT = 0;
 let wsSendT = 0;
 
@@ -890,20 +901,20 @@ function connectToServer() {
         wsId = data.id;
         data.players.forEach(pl => {
           if (pl.id === wsId) return;
-        remotePlayers.set(pl.id, {
-          x: pl.x, y: pl.y, tx: pl.x, ty: pl.y,
-          face: pl.face || 1,
-          name: pl.name || 'Oyuncu', lvl: pl.lvl || 1,
-          cls: pl.cls || 'warrior', king: pl.king || 0,
-          hp: pl.hp || 100, maxhp: pl.maxhp || 100,
-          mv: false, t: 0, lastSeen: performance.now()
+          remotePlayers.set(pl.id, {
+            x: pl.x, y: pl.y, tx: pl.x, ty: pl.y,
+            face: pl.face || 1,
+            name: pl.name || 'Oyuncu', lvl: pl.lvl || 1,
+            cls: pl.cls || 'warrior', king: pl.king || 0,
+            hp: pl.hp || 100, maxhp: pl.maxhp || 100,
+            mv: false, t: 0, lastSeen: performance.now()
           });
         });
       } else if (data.type === 'player') {
         if (data.id === wsId) return;
         const existing = remotePlayers.get(data.id) || { name: 'Oyuncu', lvl: 1, cls: 'warrior', king: 0, t: 0, mv: false };
         existing.tx = data.x; existing.ty = data.y; existing.face = data.face || 1;
-if (existing.x === undefined) { existing.x = data.x; existing.y = data.y; }
+        if (existing.x === undefined) { existing.x = data.x; existing.y = data.y; }
         existing.name = data.name || existing.name;
         existing.lvl = data.lvl || existing.lvl || 1;
         existing.cls = data.cls || existing.cls || 'warrior';
@@ -1039,6 +1050,81 @@ function toggleSTT() {
   msg('Ses tanıma: ' + (VOICE.sttOn ? 'AÇIK' : 'KAPALI'), VOICE.sttOn ? '#86efac' : '#9ca3af');
 }
 
+// ========== GÜNLÜK GÖREVLER ==========
+function todayStr() { return new Date().toISOString().slice(0, 10); }
+function checkDaily() {
+  if (!p) return;
+  const today = todayStr();
+  if (!p.daily || p.daily.date !== today) {
+    const q1 = { type: 'kill', need: 20 + p.lvl * 2, have: 0, done: false, reward: { xp: 500 + p.lvl * 50, gold: 1000 + p.lvl * 100 } };
+    const q2 = { type: 'stone', need: 2, have: 0, done: false, reward: { xp: 800 + p.lvl * 80, gold: 2000 + p.lvl * 200 } };
+    const q3 = { type: 'gold', need: 5000 + p.lvl * 500, have: 0, done: false, reward: { xp: 300 + p.lvl * 30, gold: 0, item: true } };
+    p.daily = { date: today, quests: [q1, q2, q3] };
+    msg('📅 Günlük görevler yenilendi! (G tuşu)', '#86efac');
+  }
+}
+function progressDaily(type, amount) {
+  if (!p.daily) return;
+  p.daily.quests.forEach(q => {
+    if (q.type !== type || q.done) return;
+    q.have += amount;
+    if (q.have >= q.need) {
+      q.done = true;
+      gainXp(q.reward.xp);
+      p.gold += q.reward.gold;
+      if (q.reward.item) {
+        const it = genItem(p.lvl + 3, 0.3);
+        addItem(it);
+        msg('🎁 Günlük görev ödülü: ' + itName(it), RCOL[it.rar]);
+      }
+      msg('✅ Günlük görev tamam! +' + q.reward.xp + ' XP, +' + q.reward.gold + ' Yang', '#86efac');
+      say_banner('GÜNLÜK GÖREV TAMAM!', '#86efac');
+      SFX.lvl();
+    }
+  });
+}
+
+// ========== DUNGEON ==========
+function enterDungeon(d) {
+  if (p.lvl < d.bossLvl - 10) { msg('Çok düşük seviye. Önerilen: Lv ' + (d.bossLvl - 10) + '+', '#fca5a5'); SFX.err(); return; }
+  const returnPos = { x: d.portalX + 100, y: d.portalY + 100 };
+  const dgX = 80000 + d.id * 5000, dgY = 80000;
+  p.x = dgX; p.y = dgY; p.target = null; p.dest = null;
+  cam.x = p.x - VW / 2; cam.y = p.y - VH / 2;
+  const mobs = [];
+  for (let i = 0; i < d.mobCount; i++) {
+    const a = Math.random() * 6.28, r = 250 + Math.random() * 800;
+    const m = spawnMonster({ x: dgX + Math.cos(a) * r, y: dgY + Math.sin(a) * r }, d.tier, false);
+    m.dungeon = true; mobs.push(m);
+  }
+  const boss = spawnMonster({ x: dgX, y: dgY - 450 }, d.tier, true);
+  boss.dungeon = true; boss.bossName = d.name + ' Efendisi'; boss.aggroR = 99999;
+  dungeonState = { id: d.id, def: d, boss, mobs, returnPos, startTime: performance.now(), timeLimit: 5 * 60 * 1000, bossAlive: true };
+  msg('🏰 ' + d.name + ' — ' + d.mobCount + ' mob + 1 BOSS', '#ffd66b');
+  msg('⏱️ 5 dakika süren var! ESC ile çıkabilirsin.', '#fca5a5');
+  SFX.dungeon();
+}
+function exitDungeon(success) {
+  if (!dungeonState) return;
+  monsters = monsters.filter(m => !m.dungeon);
+  if (success) {
+    const d = dungeonState.def;
+    gainXp(d.reward.xp); p.gold += d.reward.gold;
+    const dropItem = genItem(d.bossLvl + 5, 0.5);
+    addItem(dropItem);
+    msg('🏆 Zindan tamamlandı! +' + d.reward.gold + ' Yang, +' + d.reward.xp + ' XP', '#86efac');
+    msg('🎁 Ganimet: ' + itName(dropItem), RCOL[dropItem.rar]);
+    say_banner('ZİNDAN TAMAMLANDI!', '#86efac');
+    SFX.mastery();
+  } else {
+    msg('❌ Zindandan çıkıldı.', '#fca5a5');
+  }
+  p.x = dungeonState.returnPos.x; p.y = dungeonState.returnPos.y;
+  p.target = null; p.dest = null;
+  cam.x = p.x - VW / 2; cam.y = p.y - VH / 2;
+  dungeonState = null;
+}
+
 function processVoiceCommand(text) {
   if (!text) return;
   const t = text.toLowerCase();
@@ -1052,11 +1138,12 @@ function processVoiceCommand(text) {
     { keys: ['yetenek', 'beceri', 'skill'], fn: () => { toggleWin('skl'); SFX.voiceCmd(); } },
     { keys: ['topla', 'ganimet', 'loot', 'al'], fn: () => { pickupNearest(); SFX.voiceCmd(); } },
     { keys: ['şehir', 'sehir', 'ışınlan', 'isinlan', 'köye', 'koye'], fn: () => { recallScroll(); SFX.voiceCmd(); } },
+    { keys: ['günlük', 'gunluk', 'daily'], fn: () => { toggleWin('daily'); SFX.voiceCmd(); } },
     { keys: ['saldırı bir', 'birinci', 'birinci yetenek'], fn: () => { castSkill(0); SFX.voiceCmd(); } },
     { keys: ['saldırı iki', 'ikinci', 'ikinci yetenek'], fn: () => { castSkill(1); SFX.voiceCmd(); } },
     { keys: ['üçüncü', 'ucuncu', 'üçüncü yetenek'], fn: () => { castSkill(2); SFX.voiceCmd(); } },
     { keys: ['dördüncü', 'dorduncu', 'dördüncü yetenek'], fn: () => { castSkill(3); SFX.voiceCmd(); } },
-    { keys: ['yardım', 'yardim', 'help'], fn: () => { msg('Komutlar: saldır, dur, iyileştir, mana, envanter, karakter, yetenek, topla, şehir, birinci/ikinci/üçüncü/dördüncü', '#9bd8ff'); SFX.voiceCmd(); } },
+    { keys: ['yardım', 'yardim', 'help'], fn: () => { msg('Komutlar: saldır, dur, iyileştir, mana, envanter, karakter, yetenek, topla, şehir, günlük', '#9bd8ff'); SFX.voiceCmd(); } },
   ];
   for (const c of cmds) {
     for (const k of c.keys) { if (t.includes(k)) { c.fn(); return; } }
@@ -1092,8 +1179,9 @@ const wins = {
   skl: { w: 400, h: 560, t: 'Yetenekler', open: false, placed: false }, shop: { w: 300, h: 330, t: 'Genel Mağaza', open: false, placed: false },
   smith: { w: 338, h: 372, t: 'Demirci', open: false, placed: false }, quest: { w: 330, h: 290, t: 'Köy Yaşlısı', open: false, placed: false },
   special: { w: 400, h: 500, t: 'Kraliyet Hazinesi', open: false, placed: false },
+  daily: { w: 340, h: 300, t: 'Günlük Görevler', open: false, placed: false },
 };
-let order = ['chr', 'skl', 'inv', 'shop', 'smith', 'special', 'quest'];
+let order = ['chr', 'skl', 'inv', 'shop', 'smith', 'special', 'quest', 'daily'];
 let smithMsg = '';
 const ui = { reg: [], mx: 0, my: 0, drag: null, sliderActive: null };
 const region = (x, y, w, h, o) => { o.x = x; o.y = y; o.w = w; o.h = h; ui.reg.push(o); };
@@ -1110,10 +1198,10 @@ function newChar(name, cls, king, saved) {
   const c = CLS[cls];
   p = { name, cls, king, x: C.x, y: C.y + 180, face: 1, t: 0, mv: false, lvl: 1, xp: 0, gold: 200, hpPot: 5, mpPot: 3, inv: new Array(30).fill(null), eq: {}, sk: [1, 1, 1, 1], skp: 0, kills: 0,
     hp: 1, mp: 1, maxhp: 1, maxmp: 1, atk: 1, def: 0, target: null, dest: null, atkT: 0, anim: 0, combatT: 0, potT: 0, cds: [0, 0, 0, 0], buffs: [], pending: -1, interact: null, pickup: null, quest: null, dead: false, recall: 0, speed: c.speed, footT: 0,
-    bonusAtk: 0, bonusDef: 0, bonusHp: 0, hasRevive: false };
+    bonusAtk: 0, bonusDef: 0, bonusHp: 0, hasRevive: false, portalEnter: null, daily: null };
   p.eq.weapon = startWeapon(cls);
   if (saved) {
-    ['lvl', 'xp', 'gold', 'hpPot', 'mpPot', 'inv', 'eq', 'sk', 'skp', 'kills', 'quest', 'bonusAtk', 'bonusDef', 'bonusHp', 'hasRevive'].forEach(k => { if (saved[k] !== undefined) p[k] = saved[k]; });
+    ['lvl', 'xp', 'gold', 'hpPot', 'mpPot', 'inv', 'eq', 'sk', 'skp', 'kills', 'quest', 'bonusAtk', 'bonusDef', 'bonusHp', 'hasRevive', 'daily'].forEach(k => { if (saved[k] !== undefined) p[k] = saved[k]; });
     while (p.inv.length < 30) p.inv.push(null);
   }
   recalc(); p.hp = p.maxhp; p.mp = p.maxmp;
@@ -1211,6 +1299,7 @@ function makeMinimap() {
   });
   g.fillStyle = '#6b6b68';
   MOUNTAINS.forEach(m => { g.beginPath(); g.arc(m.x * k, m.y * k, 1.5, 0, 7); g.fill(); });
+  DUNGEONS.forEach(d => { g.fillStyle = d.color; g.beginPath(); g.arc(d.portalX * k, d.portalY * k, 2.5, 0, 7); g.fill(); g.strokeStyle = '#000'; g.lineWidth = 1; g.stroke(); });
   MMBG = c;
 }
 function spawnMonster(near, tierForce, boss) {
@@ -1236,15 +1325,15 @@ function initWorld() {
   for (let i = 0; i < 50; i++) spawnStone();
   for (let i = 0; i < 480; i++) spawnMonster();
   npcs = [
-    { name: 'Demirci', title: 'İtemleri +9\'a Bas', x: C.x - 180, y: C.y - 120 + 54, win: 'smith', face: 1, t: 0, look: { skin: '#d8ab80', hair: '#6b4a2a', hs: 'short', armor: '#5a4632', pants: '#3a2c1e', wk: 'club', wc: '#6b5a40', cape: null } },
+    { name: 'Demirci', title: 'Yükselt ve Birleştir', x: C.x - 180, y: C.y - 120 + 54, win: 'smith', face: 1, t: 0, look: { skin: '#d8ab80', hair: '#6b4a2a', hs: 'short', armor: '#5a4632', pants: '#3a2c1e', wk: 'club', wc: '#6b5a40', cape: null } },
     { name: 'Genel Mağaza', title: 'İksirler ve Ticaret', x: C.x + 180, y: C.y - 120 + 54, win: 'shop', face: -1, t: 1, look: { skin: '#e7c298', hair: '#7a2d2d', hs: 'long', armor: '#6d28d9', pants: '#4c1d95', wk: 'staff', wc: '#9ca3af', cape: null } },
     { name: 'Köy Yaşlısı', title: 'Görevler', x: C.x - 180, y: C.y + 120 + 54, win: 'quest', face: 1, t: 2, look: { skin: '#e0b98f', hair: '#e5e7eb', hs: 'long', armor: '#1e5a80', pants: '#17405a', wk: 'staff', wc: '#9ca3af', cape: null } },
     { name: 'Kraliyet Tüccarı', title: 'Özel Eşyalar', x: C.x + 180, y: C.y + 120 + 54, win: 'special', face: -1, t: 3, look: { skin: '#f0d5a8', hair: '#fbbf24', hs: 'long', armor: '#8a6a1e', pants: '#5a4610', wk: 'staff', wc: '#fde047', cape: '#facc15' } },
   ];
   say('Sistem', 'EfsunX Online dünyasına hoş geldin, ' + p.name + '!', '#fbbf24');
   msg('Yürümek ve savaşmak için sol tıkla. Envanterden eşyaları sağ tıkla giy.', '#fbbf24');
-  msg('🎤 Sesli sohbet için V tuşuna bas (mikrofon izni istenir).', '#86efac');
-  msg('⭐ Tüm yetenekler 10 olunca Yang ile 20\'ye kadar ustalaşabilirsin!', '#fde047');
+  msg('🏰 3 Zindan açık: sağ/sol/alt portallara tıkla!', '#ffd66b');
+  msg('📅 Günlük görevler için G tuşuna bas.', '#86efac');
 }
 
 // ============================================================ combat
@@ -1280,6 +1369,7 @@ function gainXp(x) {
 function kill(e) {
   e.dead = true; e.dtime = e.isStone ? .01 : .9; if (p.target === e) p.target = null;
   if (e.isStone) {
+    progressDaily('stone', 1);
     stones.splice(stones.indexOf(e), 1);
     gainXp(Math.round(e.lvl * e.lvl * 8)); p.gold += e.lvl * 50;
     for (let i = 0; i < 3; i++) dropAt(e.x, e.y, { item: genItem(e.lvl, .35) });
@@ -1291,6 +1381,7 @@ function kill(e) {
     setTimeout(() => { if (started && stones.length < 50) spawnStone(); }, 25000);
   } else {
     gainXp(xpFor(e)); p.kills++;
+    progressDaily('kill', 1);
     dropAt(e.x, e.y, { gold: Math.max(1, Math.round(R(.6, 1.5) * (e.lvl * 3 + 5) * (e.boss ? 6 : 1))) });
     if (Math.random() < (e.boss ? 1 : .16)) dropAt(e.x, e.y, { item: genItem(e.lvl, e.boss ? .4 : 0) });
     if (e.boss) { dropAt(e.x, e.y, { item: genItem(e.lvl, .5) }); dropAt(e.x, e.y, { item: genItem(e.lvl, .5) }); }
@@ -1341,6 +1432,7 @@ function die() {
     fx.push({ k: 'pillar', x: p.x, y: p.y, c: '#86efac', l: 1.2, m: 1.2 });
     return;
   }
+  if (dungeonState) { exitDungeon(false); }
   p.dead = true; p.target = null; p.dest = null; p.hp = 0; p.recall = 0;
   msg('Karakterin öldü.', '#f87171'); say_banner('ÖLDÜN', '#f87171');
   monsters.forEach(m => m.aggro = false);
@@ -1359,7 +1451,7 @@ function usePotion(kind) {
 function recallScroll() { if (p.dead) return; if (dist(p, C) < TOWN) { msg('Zaten şehirdesin.', '#fca5a5'); return; } p.recall = 3; msg('Şehir parşömeni okunuyor... 3 saniye kıpırdama.', '#9bd8ff'); }
 function pickupNearest() { let b = null, bd = 250; for (const d of drops) { const q = dist(d, p); if (q < bd) { bd = q; b = d; } } if (b) { p.pickup = b; p.target = null; p.dest = null; } else msg('Yakınlarda toplanacak eşya yok.', '#fca5a5'); }
 function takeDrop(d) {
-  if (d.gold) { p.gold += d.gold; floatText(p.x, p.y - 50, '+' + d.gold + ' yang', '#fde047'); SFX.coin(); }
+  if (d.gold) { p.gold += d.gold; floatText(p.x, p.y - 50, '+' + d.gold + ' yang', '#fde047'); SFX.coin(); progressDaily('gold', d.gold); }
   else if (d.pot) { if (d.pot === 'hp') p.hpPot++; else p.mpPot++; msg('Alındı: ' + (d.pot === 'hp' ? 'HP' : 'MP') + ' İksiri', '#86efac'); SFX.pick(); }
   else if (d.item) { if (!addItem(d.item)) { msg('Envanter dolu!', '#fca5a5'); SFX.err(); return false; } msg('Alındı: ' + itName(d.item), RCOL[d.item.rar]); SFX.pick(); }
   drops.splice(drops.indexOf(d), 1); if (p.pickup === d) p.pickup = null; return true;
@@ -1387,6 +1479,44 @@ function offerQuest() {
   p.quest = { k, need, have: 0, st: 'active', xp: Math.round(need * xpOfLvl(L) * 1.6), gold: need * (L * 4 + 20) }; SFX.click();
 }
 function completeQuest() { const q = p.quest; gainXp(q.xp); p.gold += q.gold; p.hpPot += 4; p.mpPot += 3; msg('Görev ödülü: ' + q.xp + ' XP, ' + q.gold + ' Yang, iksirlikler alındı.', '#86efac'); p.quest = null; SFX.lvl(); }
+
+// ========== CRAFT ==========
+function craftCost(tier) { return [0, 0, 500, 2000, 8000, 30000][tier] || 0; }
+function countCraftable(type, tier) {
+  let n = 0;
+  p.inv.forEach(it => { if (it && it.type === type && it.tier === tier && !it.plus) n++; });
+  return n;
+}
+function craftItem(type, tier) {
+  if (tier >= 6) { msg('Bu zaten en üst tier!', '#fca5a5'); SFX.err(); return; }
+  const have = countCraftable(type, tier);
+  if (have < 3) { msg('3 aynı item gerekli (sende ' + have + ')', '#fca5a5'); SFX.err(); return; }
+  const cost = craftCost(tier);
+  if (p.gold < cost) { msg('Yetersiz Yang. Gereken: ' + cost, '#fca5a5'); SFX.err(); return; }
+  let removed = 0;
+  for (let i = 0; i < p.inv.length && removed < 3; i++) {
+    const it = p.inv[i];
+    if (it && it.type === type && it.tier === tier && !it.plus) { p.inv[i] = null; removed++; }
+  }
+  p.gold -= cost;
+  const newTier = tier + 1;
+  const base = (10 + newTier * 6) * R(.9, 1.1);
+  const it = { id: uid(), type, tier: newTier, rar: 0, lvl: Math.max(1, newTier * 5 + 1), plus: 0, atk: 0, def: 0, hp: 0, sub: type };
+  if (type === 'weapon') { const cl = Math.random() < .8 && p ? p.cls : pick(Object.keys(CLS)); it.cls = cl; it.sub = CLS[cl].weapon; it.atk = Math.round(base * 1.5); }
+  else if (type === 'armor') it.def = Math.round(base * 1.1);
+  else if (type === 'helm') it.def = Math.round(base * .6);
+  else if (type === 'shield') it.def = Math.round(base * .7);
+  else if (type === 'boots') it.def = Math.round(base * .5);
+  else { it.hp = Math.round(base * 5); it.atk = Math.round(base * .3); }
+  it.name = TIERS[newTier] + ' ' + SUBN[it.sub];
+  it.val = Math.round((it.atk * 2 + it.def * 2 + it.hp * .3) * 1.5) + 3;
+  addItem(it);
+  smithMsg = 'Birleştirildi: ' + itName(it) + ' (Tier ' + newTier + ')';
+  msg('🔨 Birleştirildi: ' + itName(it), RCOL[it.rar]);
+  SFX.upg();
+  burst(p.x, p.y - 20, 20, '#c084fc', 100, .6, 2.5);
+  recalc();
+}
 
 // -------- Special (Royal) shop --------
 function getSpecialItems() {
@@ -1465,20 +1595,22 @@ const pickAt = (wx, wy) => {
   for (const n of npcs) test(n, 'npc', 22, 26);
   for (const m of monsters) if (!m.dead) test(m, 'mon', 14 * m.sc, m.r + 8);
   for (const s of stones) test(s, 'stone', 36, 52);
+  for (const d of DUNGEONS) test({ x: d.portalX, y: d.portalY, portal: d }, 'portal', d.portalR * .6, d.portalR);
   return best;
 };
 function worldClick(mx, my) {
   if (p.dead) return; const wx = cam.x + mx / Z, wy = cam.y + my / Z, h = pickAt(wx, wy); p.pending = -1;
   if (h) {
-    if (h.k === 'mon' || h.k === 'stone') { p.target = h.e; p.dest = null; p.interact = null; p.pickup = null; }
-    else if (h.k === 'npc') { p.interact = h.e; p.target = null; p.dest = null; p.pickup = null; }
-    else { p.pickup = h.e; p.target = null; p.dest = null; p.interact = null; }
-  } else { p.dest = { x: clamp(wx, 30, WORLD - 30), y: clamp(wy, 30, WORLD - 30) }; p.target = null; p.pickup = null; p.interact = null; fx.push({ k: 'ring', x: wx, y: wy, r: 3, max: 22, c: '#ffffff' }); }
+    if (h.k === 'mon' || h.k === 'stone') { p.target = h.e; p.dest = null; p.interact = null; p.pickup = null; p.portalEnter = null; }
+    else if (h.k === 'npc') { p.interact = h.e; p.target = null; p.dest = null; p.pickup = null; p.portalEnter = null; }
+    else if (h.k === 'portal') { p.portalEnter = h.e.portal; p.target = null; p.dest = null; p.pickup = null; p.interact = null; }
+    else { p.pickup = h.e; p.target = null; p.dest = null; p.interact = null; p.portalEnter = null; }
+  } else { p.dest = { x: clamp(wx, 30, WORLD - 30), y: clamp(wy, 30, WORLD - 30) }; p.target = null; p.pickup = null; p.interact = null; p.portalEnter = null; fx.push({ k: 'ring', x: wx, y: wy, r: 3, max: 22, c: '#ffffff' }); }
 }
 function bringFront(k) { order = order.filter(o => o !== k); order.push(k); }
 function openWin(k) {
   const w = wins[k]; if (!w.placed) {
-    const pos = { inv: [VW - w.w - 16, 90], chr: [VW - w.w - 330, 90], skl: [VW - w.w - 430, 90], shop: [VW / 2 - w.w / 2 - 120, 110], smith: [VW / 2 - w.w / 2 - 120, 100], special: [VW / 2 - w.w / 2 - 100, 60], quest: [VW / 2 - w.w / 2 - 120, 120] }[k];
+    const pos = { inv: [VW - w.w - 16, 90], chr: [VW - w.w - 330, 90], skl: [VW - w.w - 430, 90], shop: [VW / 2 - w.w / 2 - 120, 110], smith: [VW / 2 - w.w / 2 - 120, 100], special: [VW / 2 - w.w / 2 - 100, 60], quest: [VW / 2 - w.w / 2 - 120, 120], daily: [VW / 2 - 170, 100] }[k];
     w.x = clamp(pos[0], 4, Math.max(4, VW - w.w - 4)); w.y = clamp(pos[1], 4, Math.max(4, VH - w.h - 4)); w.placed = true;
   }
   w.open = true; bringFront(k); SFX.click();
@@ -1519,7 +1651,7 @@ cv.addEventListener('mousedown', e => {
     if (r.block) return;
   }
   if (e.button === 0) worldClick(e.clientX, e.clientY);
-  else if (e.button === 2 && !p.dead) { const wx = cam.x + e.clientX / Z, wy = cam.y + e.clientY / Z; p.dest = { x: clamp(wx, 30, WORLD - 30), y: clamp(wy, 30, WORLD - 30) }; p.target = null; p.pickup = null; p.interact = null; }
+  else if (e.button === 2 && !p.dead) { const wx = cam.x + e.clientX / Z, wy = cam.y + e.clientY / Z; p.dest = { x: clamp(wx, 30, WORLD - 30), y: clamp(wy, 30, WORLD - 30) }; p.target = null; p.pickup = null; p.interact = null; p.portalEnter = null; }
 });
 cv.addEventListener('wheel', e => { Z = clamp(Z * (e.deltaY < 0 ? 1.08 : .92), .5, 1.5); e.preventDefault(); }, { passive: false });
 window.addEventListener('keydown', e => {
@@ -1542,7 +1674,7 @@ window.addEventListener('keydown', e => {
   if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
   keys[k] = true;
   if (k === 'enter') { chatMode = true; return; }
-  if (k === 'i') toggleWin('inv'); else if (k === 'c') toggleWin('chr'); else if (k === 'k') toggleWin('skl');
+  if (k === 'i') toggleWin('inv'); else if (k === 'c') toggleWin('chr'); else if (k === 'k') toggleWin('skl'); else if (k === 'g') toggleWin('daily');
   else if (k === 'n') { MINIMAP.open = !MINIMAP.open; msg('Mini harita ' + (MINIMAP.open ? 'açık' : 'kapalı'), '#9ca3af'); }
   else if (k === 'm') { SETTINGS.muted = !SETTINGS.muted; applyAudioSettings(); msg('Ses ' + (SETTINGS.muted ? 'kapalı' : 'açık'), '#9ca3af'); }
   else if (k === 'v') {
@@ -1555,6 +1687,7 @@ window.addEventListener('keydown', e => {
   else if (k === '5' || k === 'q') usePotion('hp'); else if (k === '6' || k === 'e') usePotion('mp');
   else if (k === '7') recallScroll(); else if (k === 'z' || k === '8') pickupNearest();
   else if (k === 'escape') {
+    if (dungeonState) { exitDungeon(false); p.target = null; e.preventDefault(); return; }
     let closed = false;
     for (let i = order.length - 1; i >= 0; i--) if (wins[order[i]].open) { wins[order[i]].open = false; closed = true; break; }
     if (!closed) SETTINGS.open = true;
@@ -1645,7 +1778,7 @@ function update(dt) {
   if (!p.dead) updatePlayer(dt);
   updateMonsters(dt);
   for (const s of stones) { s.act -= dt; if (s.act > 0) { s.st -= dt; s.guards = s.guards.filter(alive); if (s.st <= 0 && s.guards.length < 6) { s.st = 5; s.guards.push(spawnMonster(s, s.tier), spawnMonster(s, s.tier)); } } }
-  spawnT -= dt; if (spawnT <= 0) { spawnT = 1.0; if (monsters.filter(m => !m.dead).length < 480) spawnMonster(); }
+  spawnT -= dt; if (spawnT <= 0) { spawnT = 1.0; if (monsters.filter(m => !m.dead && !m.dungeon).length < 480) spawnMonster(); }
   for (const n of npcs) n.t += dt;
   for (const d of drops.slice()) { d.t += dt; d.life -= dt; if (d.life <= 0) drops.splice(drops.indexOf(d), 1); else if (d.gold && !p.dead && dist(d, p) < 65) takeDrop(d); }
   for (const pr of projs.slice()) { const tg = pr.tg; if (!alive(tg)) { projs.splice(projs.indexOf(pr), 1); continue; } const ty = tg.y - 16 * (tg.sc || 1) - (tg.isStone ? 24 : 0), dx = tg.x - pr.x, dy = ty - pr.y, d = Math.hypot(dx, dy); pr.a = Math.atan2(dy, dx); if (d < 14) { hurt(tg, pr.dmg, { c: pr.kind === 'orb' ? '#7dd3fc' : undefined }); projs.splice(projs.indexOf(pr), 1); } else { pr.x += dx / d * pr.sp * dt; pr.y += dy / d * pr.sp * dt; if (pr.kind === 'orb' && Math.random() < .6) parts.push({ x: pr.x, y: pr.y, vx: 0, vy: 0, l: .3, m: .3, c: '#7dd3fc', s: 2.4, g: 0 }); } }
@@ -1658,6 +1791,7 @@ function update(dt) {
   saveT -= dt; if (saveT <= 0) { saveT = 8; save(); }
   updateWeather(dt);
   updateVoice(dt);
+  if (p.daily && p.daily.date !== todayStr()) checkDaily();
   const spawnRate = WEATHER.kind === 'clear' ? 22 : WEATHER.kind === 'rain' ? 260 : WEATHER.kind === 'snow' ? 90 : WEATHER.kind === 'leaves' ? 90 : 40;
   if (Math.random() < dt * spawnRate) spawnAmbient();
   for (let i = ambient.length - 1; i >= 0; i--) {
@@ -1674,13 +1808,33 @@ function update(dt) {
   musicTick(dt);
   drumTick(dt);
 
-  // ---- Multiplayer: pozisyon gönder (10 Hz) + bağlantı kontrolü ----
- wsSendT -= dt;
-if (wsConnected && p && !p.dead && wsSendT <= 0) {
-  wsSendT = 0.05; // 20 Hz (önceden 0.1 = 10 Hz)
-  wsSend({ type: 'move', x: Math.round(p.x), y: Math.round(p.y), face: p.face, name: p.name, lvl: p.lvl, cls: p.cls, king: p.king, hp: Math.ceil(p.hp), maxhp: p.maxhp });
-}
-  // Uzak oyuncuların zaman aşımı (5 sn)
+  // ---- Dungeon kontrolü ----
+  if (dungeonState) {
+    const elapsed = performance.now() - dungeonState.startTime;
+    if (elapsed > dungeonState.timeLimit) { msg('⏱️ Süre doldu!', '#fca5a5'); exitDungeon(false); }
+    else if (dungeonState.bossAlive && dungeonState.boss.dead) {
+      dungeonState.bossAlive = false;
+      say_banner('BOSS YENİLDİ!', '#86efac');
+      setTimeout(() => { if (dungeonState) exitDungeon(true); }, 2500);
+    }
+  }
+  // ---- Portal enter ----
+  if (p.portalEnter && !dungeonState) {
+    const d = p.portalEnter;
+    if (Math.hypot(p.x - d.portalX, p.y - d.portalY) < 80) { enterDungeon(d); p.portalEnter = null; }
+    else moveToward(p, d.portalX, d.portalY, p.speed, dt);
+  }
+
+  // ---- Multiplayer: pozisyon gönder (20 Hz) ----
+  wsSendT -= dt;
+  if (wsConnected && p && !p.dead && wsSendT <= 0) {
+    wsSendT = 0.05;
+    wsSend({ type: 'move', x: Math.round(p.x), y: Math.round(p.y), face: p.face, name: p.name, lvl: p.lvl, cls: p.cls, king: p.king, hp: Math.ceil(p.hp), maxhp: p.maxhp });
+  }
+  if (!wsConnected && wsReconnectT > 0) {
+    wsReconnectT -= dt;
+    if (wsReconnectT <= 0) { wsReconnectT = 0; connectToServer(); }
+  }
   const nowMs = performance.now();
   for (const [id, rp] of remotePlayers) {
     if (nowMs - rp.lastSeen > 5000) remotePlayers.delete(id);
@@ -1747,7 +1901,7 @@ function updateMonsters(dt) {
 
 // ============================================================ save/load
 const SAVEK = 'sqo_metin2_save_v3';
-function save() { try { if (!p) return; localStorage.setItem(SAVEK, JSON.stringify({ name: p.name, cls: p.cls, king: p.king, lvl: p.lvl, xp: p.xp, gold: p.gold, hpPot: p.hpPot, mpPot: p.mpPot, inv: p.inv, eq: p.eq, sk: p.sk, skp: p.skp, kills: p.kills, quest: p.quest, bonusAtk: p.bonusAtk, bonusDef: p.bonusDef, bonusHp: p.bonusHp, hasRevive: p.hasRevive })); } catch (e) {} }
+function save() { try { if (!p) return; localStorage.setItem(SAVEK, JSON.stringify({ name: p.name, cls: p.cls, king: p.king, lvl: p.lvl, xp: p.xp, gold: p.gold, hpPot: p.hpPot, mpPot: p.mpPot, inv: p.inv, eq: p.eq, sk: p.sk, skp: p.skp, kills: p.kills, quest: p.quest, bonusAtk: p.bonusAtk, bonusDef: p.bonusDef, bonusHp: p.bonusHp, hasRevive: p.hasRevive, daily: p.daily })); } catch (e) {} }
 function loadSave() { try { const s = localStorage.getItem(SAVEK); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
 window.addEventListener('beforeunload', save);
 
@@ -1916,6 +2070,31 @@ function worldPass(dt) {
     const showQ = n.win === 'quest' && (!p.quest || p.quest.st === 'ready'); if (showQ) { ctx.font = 'bold 22px Georgia'; ctx.fillStyle = p.quest ? '#86efac' : '#ffd34d'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3; const yy = n.y - 82 + Math.sin(T * 4) * 3; ctx.strokeText('!', n.x, yy); ctx.fillText('!', n.x, yy); }
     if (n.win === 'special') { const yy = n.y - 82 + Math.sin(T * 3) * 3; ctx.font = 'bold 22px Georgia'; ctx.fillStyle = '#ffd66b'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3; ctx.strokeText('★', n.x, yy); ctx.fillText('★', n.x, yy); }
   }); }
+
+  // ---- Dungeon Portalları ----
+  for (const d of DUNGEONS) {
+    if (d.portalX < vx - 150 || d.portalX > vx + vw + 150 || d.portalY < vy - 150 || d.portalY > vy + vh + 150) continue;
+    add(d.portalY, () => {
+      const rgb = d.color.replace('#','').match(/../g).map(h=>parseInt(h,16)).join(',');
+      lights.push({ x: d.portalX, y: d.portalY, r: d.portalR * 1.8, c: rgb, a: .55 });
+      const t = T * 1.5;
+      for (let i = 0; i < 3; i++) {
+        const a = t + i * 2.1;
+        ctx.strokeStyle = d.color; ctx.lineWidth = 2.5 - i * .6;
+        ctx.beginPath();
+        ctx.ellipse(d.portalX, d.portalY, d.portalR * .7 - i * 4, d.portalR * .32 - i * 2, a, 0, 7);
+        ctx.stroke();
+      }
+      const gl = ctx.createRadialGradient(d.portalX, d.portalY - 20, 5, d.portalX, d.portalY, d.portalR);
+      gl.addColorStop(0, d.color + 'cc'); gl.addColorStop(.5, d.color + '55'); gl.addColorStop(1, d.color + '00');
+      ctx.fillStyle = gl; ctx.fillRect(d.portalX - d.portalR, d.portalY - d.portalR - 20, d.portalR * 2, d.portalR * 2 + 20);
+      ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.beginPath(); ctx.ellipse(d.portalX, d.portalY, d.portalR * .5, d.portalR * .22, 0, 0, 7); ctx.fill();
+      ctx.font = 'bold 32px Georgia'; ctx.textAlign = 'center'; ctx.fillText(d.icon, d.portalX, d.portalY - 30 + Math.sin(T * 2) * 4);
+      nameTag(d.portalX, d.portalY - d.portalR - 10, d.name, d.color, 14);
+      nameTag(d.portalX, d.portalY - d.portalR + 6, 'Lv ' + (d.bossLvl - 10) + '+  —  Tıkla', '#cbd5e1', 11);
+    });
+  }
+
   for (const s of stones) { if (s.x < vx - 100 || s.x > vx + vw + 100 || s.y < vy - 160 || s.y > vy + vh + 200) continue; add(s.y, () => {
     const gl = .5 + .3 * Math.sin(T * 3 + s.x); lights.push({ x: s.x, y: s.y - 50, r: 120, c: '170,80,255', a: .5 });
     const rg = ctx.createRadialGradient(s.x, s.y - 50, 5, s.x, s.y - 50, 90); rg.addColorStop(0, 'rgba(180,90,255,' + (.35 * gl + .15) + ')'); rg.addColorStop(1, 'rgba(180,90,255,0)'); ctx.fillStyle = rg; ctx.fillRect(s.x - 95, s.y - 145, 190, 190);
@@ -1932,22 +2111,19 @@ function worldPass(dt) {
     drawMonsterBody(ctx, m, m.tt);
     if (m.flash > 0 && !m.dead) { ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = m.flash * 3; drawMonsterBody(ctx, m, m.tt); ctx.globalCompositeOperation = 'source-over'; }
     ctx.restore();
-    if (!m.dead) { const ty = m.y - 56 * m.sc; nameTag(m.x, ty - 8, (m.boss ? MT[m.t].boss : MT[m.t].n) + '  Lv.' + m.lvl, m.boss ? '#ff6b6b' : lvlCol(m.lvl), m.boss ? 13 : 11); if (m.hp < m.maxhp || hov || p.target === m) hpBar(m.x, ty, m.boss ? 60 : 38, m.hp, m.maxhp, m.boss ? '#ef4444' : '#e11d48'); if (m.poison > 0) { ctx.fillStyle = '#84cc16'; ctx.beginPath(); ctx.arc(m.x + 24, ty + 2, 3, 0, 7); ctx.fill(); } } }); }
+    if (!m.dead) { const ty = m.y - 56 * m.sc; const nm = m.dungeon ? (m.boss ? (m.bossName || 'Boss') : MT[m.t].n + ' (Zindan)') : (m.boss ? MT[m.t].boss : MT[m.t].n); nameTag(m.x, ty - 8, nm + '  Lv.' + m.lvl, m.boss ? '#ff6b6b' : lvlCol(m.lvl), m.boss ? 13 : 11); if (m.hp < m.maxhp || hov || p.target === m) hpBar(m.x, ty, m.boss ? 60 : 38, m.hp, m.maxhp, m.boss ? '#ef4444' : '#e11d48'); if (m.poison > 0) { ctx.fillStyle = '#84cc16'; ctx.beginPath(); ctx.arc(m.x + 24, ty + 2, 3, 0, 7); ctx.fill(); } } }); }
 
-  // ---- Uzak oyuncuları çiz (kendi sınıfı + isim + seviye) ----
-for (const [id, rp] of remotePlayers) {
-  if (rp.x < vx - 80 || rp.x > vx + vw + 80 || rp.y < vy - 100 || rp.y > vy + vh + 100) continue;
-  // ---- Yumuşak interpolasyon ----
-  if (rp.tx !== undefined) {
-    const k = Math.min(1, dt * 18); // 18 = yumuşatma hızı (yüksek = daha çevik)
-    const dx = rp.tx - rp.x, dy = rp.ty - rp.y;
-    rp.x += dx * k;
-    rp.y += dy * k;
-    // Hareket ediyor mu? (kalan mesafeye bak)
-    rp.mv = (Math.abs(dx) + Math.abs(dy)) > 0.8;
-  }
-  rp.t = (rp.t || 0) + dt;
-  add(rp.y, () => {
+  for (const [id, rp] of remotePlayers) {
+    if (rp.x < vx - 80 || rp.x > vx + vw + 80 || rp.y < vy - 100 || rp.y > vy + vh + 100) continue;
+    if (rp.tx !== undefined) {
+      const k = Math.min(1, dt * 18);
+      const dx = rp.tx - rp.x, dy = rp.ty - rp.y;
+      rp.x += dx * k;
+      rp.y += dy * k;
+      rp.mv = (Math.abs(dx) + Math.abs(dy)) > 0.8;
+    }
+    rp.t = (rp.t || 0) + dt;
+    add(rp.y, () => {
       const rpCls = rp.cls || 'warrior';
       const rpKing = rp.king !== undefined ? rp.king : 0;
       const baseOutfit = outfit(rpCls, {}, rpKing);
@@ -2286,15 +2462,78 @@ WIN.shop = w => {
   T_('Yang: ' + p.gold, x + 18, y + w.h - 16, '#fde047', 13, 'left', true); T_('Envanter (I)', x + w.w - 18, y + w.h - 16, '#8a7c5e', 10, 'right');
 };
 WIN.smith = w => {
-  const x = w.x, y = w.y; T_('Ekipmanlarını +9\'a kadar yükselt!', x + 16, y + 52, '#d9c28a', 11);
-  SLOTS.forEach((k, i) => {
-    const it = p.eq[k], yy = y + 62 + i * 46; ctx.fillStyle = 'rgba(0,0,0,.3)'; rr(ctx, x + 12, yy, w.w - 24, 42, 5); ctx.fill(); ctx.strokeStyle = '#3b2c18'; ctx.stroke();
-    slot(x + 18, yy + 3, 36, it, { ghost: k === 'weapon' ? CLS[p.cls].weapon : k });
-    if (it) { T_(itName(it), x + 62, yy + 17, RCOL[it.rar], 12, 'left', true); if (it.plus < 9) T_('Ücret ' + upgradeCost(it) + 'g  -  %' + UPG_CH[it.plus] + ' şans', x + 62, yy + 33, it.plus >= 5 ? '#ff9a6b' : '#a9d18a', 10); else T_('Maksimum seviye (+9)', x + 62, yy + 33, '#ffd34d', 10); btn(x + w.w - 84, yy + 8, 66, 26, 'Yükselt', () => upgrade(k), it.plus < 9 && p.gold >= upgradeCost(it)); }
-    else T_(SLOTN[k] + ' (boş)', x + 62, yy + 26, '#6e6048', 11);
-  });
-  T_(smithMsg, x + w.w / 2, y + w.h - 34, /başarılı/.test(smithMsg) ? '#86efac' : '#fca5a5', 12, 'center', true);
-  T_('Yang: ' + p.gold, x + 18, y + w.h - 14, '#fde047', 12, 'left', true); T_('+5 ve üzeri yanabilir veya düşebilir', x + w.w - 18, y + w.h - 14, '#8a7c5e', 10, 'right');
+  const x = w.x, y = w.y;
+  const tabW = 100, tabH = 26, tabY = y + 38;
+  const tabUpX = x + w.w / 2 - tabW - 4, tabCrX = x + w.w / 2 + 4;
+
+  ctx.fillStyle = smithTab === 'upgrade' ? '#7a5424' : '#2a1c0f';
+  rr(ctx, tabUpX, tabY, tabW, tabH, 4); ctx.fill();
+  ctx.strokeStyle = smithTab === 'upgrade' ? '#ffd66b' : '#8a6a2a'; ctx.lineWidth = 1.5; ctx.stroke();
+  T_('Yükselt', tabUpX + tabW/2, tabY + 17, smithTab === 'upgrade' ? '#fff3c4' : '#c9b27a', 12, 'center', true);
+  region(tabUpX, tabY, tabW, tabH, { l: () => { smithTab = 'upgrade'; SFX.click(); }, block: true });
+
+  ctx.fillStyle = smithTab === 'craft' ? '#7a5424' : '#2a1c0f';
+  rr(ctx, tabCrX, tabY, tabW, tabH, 4); ctx.fill();
+  ctx.strokeStyle = smithTab === 'craft' ? '#ffd66b' : '#8a6a2a'; ctx.lineWidth = 1.5; ctx.stroke();
+  T_('Birleştir', tabCrX + tabW/2, tabY + 17, smithTab === 'craft' ? '#fff3c4' : '#c9b27a', 12, 'center', true);
+  region(tabCrX, tabY, tabW, tabH, { l: () => { smithTab = 'craft'; SFX.click(); }, block: true });
+
+  if (smithTab === 'upgrade') {
+    T_('Ekipmanlarını +9\'a kadar yükselt!', x + 16, y + 76, '#d9c28a', 11);
+    SLOTS.forEach((k, i) => {
+      const it = p.eq[k], yy = y + 84 + i * 44;
+      ctx.fillStyle = 'rgba(0,0,0,.3)'; rr(ctx, x + 12, yy, w.w - 24, 40, 5); ctx.fill(); ctx.strokeStyle = '#3b2c18'; ctx.stroke();
+      slot(x + 18, yy + 3, 34, it, { ghost: k === 'weapon' ? CLS[p.cls].weapon : k });
+      if (it) {
+        T_(itName(it), x + 60, yy + 15, RCOL[it.rar], 12, 'left', true);
+        if (it.plus < 9) T_('Ücret ' + upgradeCost(it) + 'g  -  %' + UPG_CH[it.plus] + ' şans', x + 60, yy + 31, it.plus >= 5 ? '#ff9a6b' : '#a9d18a', 10);
+        else T_('Maksimum seviye (+9)', x + 60, yy + 31, '#ffd34d', 10);
+        btn(x + w.w - 84, yy + 8, 66, 24, 'Yükselt', () => upgrade(k), it.plus < 9 && p.gold >= upgradeCost(it));
+      } else T_(SLOTN[k] + ' (boş)', x + 60, yy + 24, '#6e6048', 11);
+    });
+  } else {
+    T_('Aynı tipten 3 item\'ı bir üst tier\'a yükselt', x + 16, y + 76, '#d9c28a', 11);
+    const inv = {};
+    p.inv.forEach(it => { if (it && !it.plus) { const key = it.type + '_' + it.tier; if (!inv[key]) inv[key] = { type: it.type, tier: it.tier, count: 0, sample: it }; inv[key].count++; } });
+    const entries = Object.values(inv).filter(e => e.tier < 6).sort((a, b) => a.tier - b.tier || a.type.localeCompare(b.type));
+    if (entries.length === 0) {
+      T_('Birleştirilecek item yok.', x + w.w/2, y + 140, '#8a7c5e', 12, 'center');
+    } else {
+      entries.slice(0, 5).forEach((e, i) => {
+        const yy = y + 92 + i * 48;
+        ctx.fillStyle = 'rgba(0,0,0,.3)'; rr(ctx, x + 12, yy, w.w - 24, 44, 5); ctx.fill();
+        ctx.strokeStyle = TCOL[e.tier]; ctx.lineWidth = 1.2; ctx.stroke();
+        ctx.fillStyle = '#0d0905'; ctx.fillRect(x + 18, yy + 4, 36, 36);
+        ctx.strokeStyle = TCOL[e.tier]; ctx.strokeRect(x + 18.5, yy + 4.5, 35, 35);
+        icon(ctx, e.sample, x + 22, yy + 8, 28);
+        const okCount = e.count >= 3, cost = craftCost(e.tier), okGold = p.gold >= cost, canCraft = okCount && okGold;
+        T_(TIERS[e.tier] + ' ' + SUBN[e.sample.sub], x + 62, yy + 16, TCOL[e.tier], 12, 'left', true);
+        T_(e.count + '/3 adet', x + 62, yy + 30, okCount ? '#86efac' : '#fca5a5', 10);
+        T_('+ ' + cost + ' Yang', x + 130, yy + 30, okGold ? '#fde047' : '#fca5a5', 10);
+        const bx = x + w.w - 78, by = yy + 8, bw = 60, bh = 28;
+        const grd = ctx.createLinearGradient(0, by, 0, by + bh);
+        if (canCraft) { grd.addColorStop(0, '#d58a2a'); grd.addColorStop(1, '#8a4f10'); }
+        else { grd.addColorStop(0, '#4a4036'); grd.addColorStop(1, '#2e271f'); }
+        ctx.fillStyle = grd; rr(ctx, bx, by, bw, bh, 4); ctx.fill();
+        ctx.strokeStyle = canCraft ? '#f0c15a' : '#5a4f40'; ctx.lineWidth = 1.5; ctx.stroke();
+        T_('Birleştir', bx + bw/2, by + bh/2 + 4, canCraft ? '#fff3c4' : '#8a7f6a', 11, 'center', true);
+        region(bx, by, bw, bh, {
+          l: canCraft ? () => craftItem(e.type, e.tier) : (() => { SFX.err(); if (!okCount) msg('3 adet aynı item gerekli!', '#fca5a5'); else msg('Yetersiz Yang!', '#fca5a5'); }),
+          block: true,
+          tip: () => [
+            { t: 'Birleştir: ' + TIERS[e.tier] + ' → ' + TIERS[e.tier+1], c: TCOL[e.tier+1], b: 1 },
+            { t: 'Gerekli: 3x ' + SUBN[e.sample.sub], c: '#fff' },
+            { t: 'Maliyet: ' + cost + ' Yang', c: okGold ? '#86efac' : '#fca5a5' },
+            { t: 'Şans: %100', c: '#86efac' }
+          ]
+        });
+      });
+      if (entries.length > 5) T_('+' + (entries.length - 5) + ' tane daha...', x + w.w/2, y + w.h - 60, '#8a7c5e', 10, 'center');
+    }
+  }
+  T_(smithMsg, x + w.w / 2, y + w.h - 34, /başarılı|Birleştirildi/.test(smithMsg) ? '#86efac' : '#fca5a5', 12, 'center', true);
+  T_('Yang: ' + p.gold, x + 18, y + w.h - 14, '#fde047', 12, 'left', true);
+  T_(smithTab === 'upgrade' ? '+5 üzeri yanabilir' : 'Craft: 3x aynı tier', x + w.w - 18, y + w.h - 14, '#8a7c5e', 10, 'right');
 };
 WIN.quest = w => {
   const x = w.x, y = w.y, q = p.quest; ctx.textAlign = 'left';
@@ -2311,6 +2550,28 @@ WIN.quest = w => {
     T_('Ödül: ' + q.xp + ' XP, ' + q.gold + ' Yang', x + 24, y + 160, '#86efac', 11);
     if (q.st === 'ready') btn(x + w.w / 2 - 70, y + w.h - 54, 140, 34, 'Görevi Tamamla', () => completeQuest(), true); else T_('Avı tamamlayıp geri dön.', x + w.w / 2, y + w.h - 34, '#a89572', 12, 'center');
   }
+};
+WIN.daily = w => {
+  const x = w.x, y = w.y;
+  if (!p.daily) checkDaily();
+  const today = todayStr();
+  T_('Tarih: ' + today, x + 16, y + 54, '#8a7c5e', 11);
+  T_('Gece yarısı yenilenir', x + w.w - 16, y + 54, '#8a7c5e', 10, 'right');
+  if (!p.daily) return;
+  p.daily.quests.forEach((q, i) => {
+    const yy = y + 68 + i * 66;
+    ctx.fillStyle = q.done ? 'rgba(20,60,20,.4)' : 'rgba(0,0,0,.3)';
+    rr(ctx, x + 12, yy, w.w - 24, 60, 5); ctx.fill();
+    ctx.strokeStyle = q.done ? '#86efac' : '#3b2c18'; ctx.lineWidth = 1.2; ctx.stroke();
+    const title = q.type === 'kill' ? '🐺 ' + q.need + ' Canavar Öldür' : q.type === 'stone' ? '🔮 ' + q.need + ' Metin Taşı Kır' : '💰 ' + q.need + ' Yang Topla';
+    T_(title, x + 22, yy + 18, q.done ? '#86efac' : '#ffe9a8', 13, 'left', true);
+    const pct = clamp(q.have / q.need, 0, 1);
+    ctx.fillStyle = '#000'; ctx.fillRect(x + 22, yy + 26, w.w - 44, 10);
+    ctx.fillStyle = q.done ? '#86efac' : '#ffd34d'; ctx.fillRect(x + 22, yy + 26, (w.w - 44) * pct, 10);
+    T_(Math.min(q.have, q.need) + ' / ' + q.need, x + 22 + (w.w - 44) / 2, yy + 34, '#000', 10, 'center', true);
+    T_('Ödül: ' + q.reward.xp + ' XP, ' + q.reward.gold + ' Yang' + (q.reward.item ? ' + Item' : ''), x + 22, yy + 52, '#a89572', 10);
+    if (q.done) { ctx.fillStyle = '#86efac'; ctx.font = 'bold 20px Georgia'; ctx.textAlign = 'right'; ctx.fillText('✓', x + w.w - 22, yy + 22); ctx.textAlign = 'left'; }
+  });
 };
 WIN.special = w => {
   const x = w.x, y = w.y;
@@ -2412,16 +2673,22 @@ function hud() {
     ctx.strokeStyle = '#c99a3a'; ctx.lineWidth = 1.5; ctx.strokeRect(x + .5, sy + .5, ss - 1, ss - 1); T_(String(i + 1), x + 4, sy + 11, '#ffe9a8', 10, 'left', true);
     region(x, sy, ss, ss, { l: fn, tip, block: true });
   });
-  [['inv', 'Envanter (I)', 'bag'], ['chr', 'Karakter (C)', 'man'], ['skl', 'Yetenekler (K)', 'book']].forEach((b, i) => {
-    const x = VW - 12 - (4 - i) * 46, y = VH - 52; const open = wins[b[0]].open; ctx.fillStyle = open ? '#6a4a1a' : '#2a1c0f'; rr(ctx, x, y, 40, 40, 6); ctx.fill(); ctx.strokeStyle = open ? '#ffd66b' : '#8a6a2a'; ctx.lineWidth = 2; ctx.stroke();
+  [['inv', 'Envanter (I)', 'bag'], ['chr', 'Karakter (C)', 'man'], ['skl', 'Yetenekler (K)', 'book'], ['daily', 'Günlük Görevler (G)', 'daily']].forEach((b, i) => {
+    const x = VW - 12 - (5 - i) * 46, y = VH - 52; const open = wins[b[0]].open; ctx.fillStyle = open ? '#6a4a1a' : '#2a1c0f'; rr(ctx, x, y, 40, 40, 6); ctx.fill(); ctx.strokeStyle = open ? '#ffd66b' : '#8a6a2a'; ctx.lineWidth = 2; ctx.stroke();
     ctx.save(); ctx.translate(x + 20, y + 20); ctx.strokeStyle = '#ffe29a'; ctx.fillStyle = '#ffe29a'; ctx.lineWidth = 2;
-    if (b[2] === 'bag') { ctx.beginPath(); ctx.arc(0, 4, 10, 0, 7); ctx.fill(); ctx.fillRect(-5, -10, 10, 5); } else if (b[2] === 'man') { ctx.beginPath(); ctx.arc(0, -6, 5, 0, 7); ctx.fill(); ctx.beginPath(); ctx.arc(0, 12, 10, Math.PI, 0); ctx.fill(); } else { ctx.fillRect(-9, -9, 18, 18); ctx.strokeStyle = '#2a1c0f'; ln(ctx, 0, -9, 0, 9); }
+    if (b[2] === 'bag') { ctx.beginPath(); ctx.arc(0, 4, 10, 0, 7); ctx.fill(); ctx.fillRect(-5, -10, 10, 5); } else if (b[2] === 'man') { ctx.beginPath(); ctx.arc(0, -6, 5, 0, 7); ctx.fill(); ctx.beginPath(); ctx.arc(0, 12, 10, Math.PI, 0); ctx.fill(); } else if (b[2] === 'daily') { ctx.strokeStyle = '#ffe29a'; ctx.lineWidth = 2; ctx.strokeRect(-9, -9, 18, 18); ln(ctx, -9, -3, 9, -3); ln(ctx, -3, 3, 3, 3); ln(ctx, -3, 7, 3, 7); } else { ctx.fillRect(-9, -9, 18, 18); ctx.strokeStyle = '#2a1c0f'; ln(ctx, 0, -9, 0, 9); }
     ctx.restore();
     if (b[0] === 'skl' && p.skp > 0) { ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.arc(x + 34, y + 6, 7, 0, 7); ctx.fill(); T_(String(p.skp), x + 34, y + 10, '#fff', 10, 'center', true); }
     if (b[0] === 'skl' && allSkillsAt10()) { ctx.fillStyle = '#fde047'; drawStar(ctx, x + 6, y + 6, 7, 3.4, 5); }
+    if (b[0] === 'daily' && p.daily) {
+      const done = p.daily.quests.filter(q => q.done).length;
+      const all = p.daily.quests.every(q => q.done);
+      if (all) { ctx.fillStyle = '#86efac'; drawStar(ctx, x + 34, y + 6, 7, 3.4, 5); }
+      else if (done > 0) { ctx.fillStyle = '#ffd34d'; ctx.beginPath(); ctx.arc(x + 34, y + 6, 7, 0, 7); ctx.fill(); T_(String(done), x + 34, y + 10, '#000', 10, 'center', true); }
+    }
     region(x, y, 40, 40, { l: () => toggleWin(b[0]), tip: () => [{ t: b[1], c: '#ffe9a8' }], block: true });
   });
-  const vbX = VW - 12 - 4 * 46, vbY = VH - 52;
+  const vbX = VW - 12 - 5 * 46, vbY = VH - 52;
   micIcon(vbX, vbY, 40, VOICE.on, VOICE.speaking);
   region(vbX, vbY, 40, 40, {
     l: () => { toggleVoice(); },
@@ -2454,7 +2721,7 @@ function hud() {
     ctx.setLineDash([]);
     stones.forEach(s => { const sx = mx + s.x * k, sy = my + s.y * k; ctx.fillStyle = 'rgba(192,132,252,.85)'; ctx.beginPath(); ctx.arc(sx, sy, 3.5, 0, 7); ctx.fill(); ctx.strokeStyle = '#2e1065'; ctx.lineWidth = 1; ctx.stroke(); });
     npcs.forEach(n => { const sx = mx + n.x * k, sy = my + n.y * k; ctx.fillStyle = '#ffe066'; ctx.fillRect(sx - 2, sy - 2, 4, 4); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.strokeRect(sx - 2, sy - 2, 4, 4); });
-    // Uzak oyuncuları minimap'te göster
+    DUNGEONS.forEach(d => { const sx = mx + d.portalX * k, sy = my + d.portalY * k; ctx.fillStyle = d.color; ctx.beginPath(); ctx.arc(sx, sy, 3.5, 0, 7); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke(); });
     remotePlayers.forEach(rp => { const sx = mx + rp.x * k, sy = my + rp.y * k; ctx.fillStyle = '#7dd3fc'; ctx.beginPath(); ctx.arc(sx, sy, 3.5, 0, 7); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke(); });
     let nearbyCount = 0;
     monsters.forEach(m => {
@@ -2542,13 +2809,28 @@ function hud() {
     if (q.st === 'ready') T_('Köy Yaşlısına git', qmx + 4, ty + 44, '#86efac', 10);
   }
   const tg = p.target && alive(p.target) ? p.target : null;
-  if (tg) { const w = 320, x = cx - w / 2, y = 12, nm = tg.isStone ? (METIN_NAMES[tg.tier - 1] || 'Metin Taşı') : (tg.boss ? MT[tg.t].boss : MT[tg.t].n); ctx.fillStyle = 'rgba(15,8,4,.85)'; rr(ctx, x, y, w, 46, 6); ctx.fill(); ctx.strokeStyle = '#8a6a2a'; ctx.lineWidth = 2; ctx.stroke();
+  if (tg) { const w = 320, x = cx - w / 2, y = 12, nm = tg.isStone ? (METIN_NAMES[tg.tier - 1] || 'Metin Taşı') : (tg.boss ? (tg.bossName || MT[tg.t].boss) : MT[tg.t].n); ctx.fillStyle = 'rgba(15,8,4,.85)'; rr(ctx, x, y, w, 46, 6); ctx.fill(); ctx.strokeStyle = '#8a6a2a'; ctx.lineWidth = 2; ctx.stroke();
     T_(nm, x + 12, y + 18, tg.boss ? '#ff6b6b' : '#ffe9a8', 14, 'left', true); T_('Lv.' + tg.lvl, x + w - 12, y + 18, lvlCol(tg.lvl), 13, 'right', true); ctx.fillStyle = '#000'; ctx.fillRect(x + 12, y + 26, w - 24, 14); const g = ctx.createLinearGradient(0, y + 26, 0, y + 40); g.addColorStop(0, '#ff6a6a'); g.addColorStop(1, '#a01818'); ctx.fillStyle = g; ctx.fillRect(x + 12, y + 26, (w - 24) * clamp(tg.hp / tg.maxhp, 0, 1), 14); ctx.strokeStyle = '#d6a845'; ctx.strokeRect(x + 11.5, y + 25.5, w - 23, 15); T_(Math.ceil(tg.hp) + ' / ' + tg.maxhp, cx, y + 37, '#fff', 10, 'center', true); }
   p.buffs.forEach((b, i) => { const x = 12 + i * 38, y = 12; ctx.fillStyle = 'rgba(20,40,70,.8)'; ctx.fillRect(x, y, 34, 34); ctx.strokeStyle = '#7dd3fc'; ctx.strokeRect(x + .5, y + .5, 33, 33); T_('+', x + 17, y + 22, '#7dd3fc', 20, 'center', true); T_(Math.ceil(b.t) + 's', x + 17, y + 31, '#fff', 9, 'center'); region(x, y, 34, 34, { tip: () => [{ t: b.name, c: '#7dd3fc', b: 1 }, { t: Math.ceil(b.t) + ' saniye kaldı', c: '#ccc' }], block: true }); });
   const chx = 10, chh = 168, chy = VH - chh - 10, chw = Math.min(400, Math.max(260, cx - barW / 2 - 24));
   ctx.fillStyle = 'rgba(0,0,0,.45)'; rr(ctx, chx, chy, chw, chh, 6); ctx.fill(); ctx.strokeStyle = 'rgba(138,106,42,.8)'; ctx.lineWidth = 1.5; ctx.stroke(); region(chx, chy, chw, chh, { block: true });
   ctx.save(); ctx.beginPath(); ctx.rect(chx, chy, chw, chh); ctx.clip(); const lines = chat.slice(-9); lines.forEach((c, i) => { const yy = chy + 18 + i * 15; ctx.font = '12px Georgia'; ctx.textAlign = 'left'; if (c.n) { T_(c.n + ':', chx + 8, yy, c.c, 12, 'left', true); const w2 = ctx.measureText(c.n + ': ').width; T_(c.t, chx + 8 + w2, yy, '#e8e0cc', 12); } else T_(c.t, chx + 8, yy, c.c, 12); }); ctx.restore();
-  ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(chx + 4, chy + chh - 24, chw - 8, 20); T_(chatMode ? chatBuf + (Math.floor(T * 2) % 2 ? '|' : '') : 'Enter: sohbet · V: sesli sohbet · N: harita · ESC: ayarlar', chx + 10, chy + chh - 9, chatMode ? '#fff' : '#7c6f55', 11);
+  ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(chx + 4, chy + chh - 24, chw - 8, 20); T_(chatMode ? chatBuf + (Math.floor(T * 2) % 2 ? '|' : '') : 'Enter: sohbet · V: ses · G: günlük · N: harita · ESC: ayarlar', chx + 10, chy + chh - 9, chatMode ? '#fff' : '#7c6f55', 11);
+  // Dungeon status
+  if (dungeonState) {
+    const d = dungeonState.def;
+    const elapsed = (performance.now() - dungeonState.startTime) / 1000;
+    const remain = Math.max(0, 5 * 60 - elapsed);
+    const mm2 = Math.floor(remain / 60), ss2 = Math.floor(remain % 60);
+    const w = 400, x = cx - w / 2, y = 70;
+    ctx.fillStyle = 'rgba(15,8,4,.9)'; rr(ctx, x, y, w, 42, 6); ctx.fill();
+    ctx.strokeStyle = remain < 30 ? '#ef4444' : d.color; ctx.lineWidth = 2; ctx.stroke();
+    T_(d.icon + ' ' + d.name, x + 12, y + 18, d.color, 13, 'left', true);
+    T_('⏱️ ' + mm2 + ':' + String(ss2).padStart(2, '0'), x + w - 12, y + 18, remain < 60 ? '#fca5a5' : '#fff', 13, 'right', true);
+    const killed = dungeonState.mobs.filter(m => m.dead).length;
+    T_('Mob: ' + killed + '/' + dungeonState.mobs.length + '   Boss: ' + (dungeonState.bossAlive ? '❤️ ' + Math.round(dungeonState.boss.hp / dungeonState.boss.maxhp * 100) + '%' : '✓'), x + 12, y + 34, '#cbd5e1', 11);
+    T_('ESC ile çık', x + w - 12, y + 34, '#8a7c5e', 10, 'right');
+  }
   if (banner) { const a = clamp(banner.l, 0, 1), sc = 1 + (1 - clamp(banner.l / 3, 0, 1)) * .05; ctx.globalAlpha = a; ctx.font = 'bold ' + Math.round(34 * sc) + 'px Georgia'; ctx.textAlign = 'center'; ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(0,0,0,.9)'; ctx.strokeText(banner.t, cx, VH * .26); ctx.fillStyle = banner.c; ctx.fillText(banner.t, cx, VH * .26); ctx.globalAlpha = 1; }
 }
 function windows() {
@@ -2668,9 +2950,9 @@ function voicePanelRender() {
   }
   const helpY = devY + 100;
   ctx.fillStyle = 'rgba(0,0,0,.35)'; rr(ctx, x + 24, helpY - 8, w - 48, 60, 4); ctx.fill();
-  T_('🎤 Sesli Komutlar (Ses tanıma açıkken):', x + 32, helpY + 6, '#ffe066', 11, 'left', true);
+  T_('🎤 Sesli Komutlar:', x + 32, helpY + 6, '#ffe066', 11, 'left', true);
   T_('"saldır" · "dur" · "iyileştir" · "mana" · "envanter" · "karakter"', x + 32, helpY + 22, '#c9b27a', 10);
-  T_('"yetenek" · "topla" · "şehir" · "birinci/ikinci/üçüncü/dördüncü"', x + 32, helpY + 36, '#c9b27a', 10);
+  T_('"günlük" · "topla" · "şehir" · "birinci/ikinci/üçüncü/dördüncü"', x + 32, helpY + 36, '#c9b27a', 10);
   btn(x + w / 2 - 70, y + h - 44, 140, 32, 'Kapat (ESC)', () => { VOICE.panel = false; });
 }
 function tooltip() {
@@ -2701,6 +2983,7 @@ let chosenCls = 'warrior', chosenKing = 0;
 function startGame(name, cls, king, saved) {
   if (!assetsReady) { buildAssets(); assetsReady = true; }
   newChar(name, cls, king, saved); initWorld();
+  checkDaily();
   cam.x = p.x - VW / 2; cam.y = p.y - VH / 2; started = true; last = performance.now();
   try { ac(); initMusic(); initAmbient(); applyAudioSettings(); refreshVoiceDevices(); } catch(e){}
   connectToServer();
