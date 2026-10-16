@@ -861,18 +861,19 @@ const BLD = [
   { x: C.x, y: C.y, k: 'fountain', r: 40 },
 ];
 const LAMPS = [[-110, -200], [110, -200], [-110, 200], [110, 200], [-240, 0], [240, 0]].map(a => ({ x: C.x + a[0], y: C.y + a[1] }));
- 
+
 // ============================================================ MULTIPLAYER
-const WS_URL = 'wss://efsun-x.onrender.com/ws'; // ← BURAYI DEĞİŞTİR
+const WS_URL = 'wss://efsun-x.onrender.com/ws'; // ← Render URL'in (wss:// ile başlamalı)
 let ws = null;
 let wsId = null;
 let wsConnected = false;
-const remotePlayers = new Map(); // id -> { x, y, face, name, mv, t, lastSeen }
+const remotePlayers = new Map(); // id -> { x, y, face, name, lvl, cls, king, hp, maxhp, mv, t, lastSeen, _px, _py }
 let wsReconnectT = 0;
+let wsSendT = 0;
 
 function connectToServer() {
-  if (!WS_URL || WS_URL.includes('https://efsun-x.onrender.com/')) {
-    console.log('WebSocket URL ayarlanmamış, tek oyunculu mod.');
+  if (!WS_URL || !WS_URL.startsWith('wss://')) {
+    console.log('WebSocket URL ayarlanmamış veya geçersiz, tek oyunculu mod.');
     return;
   }
   try {
@@ -889,25 +890,37 @@ function connectToServer() {
         wsId = data.id;
         data.players.forEach(pl => {
           if (pl.id === wsId) return;
-          remotePlayers.set(pl.id, { x: pl.x, y: pl.y, face: 1, name: pl.name || 'Oyuncu', mv: false, t: 0, lastSeen: performance.now() });
+          remotePlayers.set(pl.id, {
+            x: pl.x, y: pl.y, face: pl.face || 1,
+            name: pl.name || 'Oyuncu', lvl: pl.lvl || 1,
+            cls: pl.cls || 'warrior', king: pl.king || 0,
+            hp: pl.hp || 100, maxhp: pl.maxhp || 100,
+            mv: false, t: 0, lastSeen: performance.now()
+          });
         });
       } else if (data.type === 'player') {
         if (data.id === wsId) return;
-        const existing = remotePlayers.get(data.id) || { name: data.name || 'Oyuncu', t: 0, mv: false };
+        const existing = remotePlayers.get(data.id) || { name: 'Oyuncu', lvl: 1, cls: 'warrior', king: 0, t: 0, mv: false };
         existing.x = data.x; existing.y = data.y; existing.face = data.face || 1;
         existing.name = data.name || existing.name;
+        existing.lvl = data.lvl || existing.lvl || 1;
+        existing.cls = data.cls || existing.cls || 'warrior';
+        existing.king = data.king !== undefined ? data.king : (existing.king || 0);
+        existing.hp = data.hp !== undefined ? data.hp : (existing.hp || 100);
+        existing.maxhp = data.maxhp !== undefined ? data.maxhp : (existing.maxhp || 100);
         existing.lastSeen = performance.now();
         remotePlayers.set(data.id, existing);
       } else if (data.type === 'leave') {
+        const rp = remotePlayers.get(data.id);
+        if (rp) msg((rp.name || 'Bir oyuncu') + ' oyundan ayrıldı.', '#9ca3af');
         remotePlayers.delete(data.id);
-        msg('Bir oyuncu ayrıldı.', '#9ca3af');
       } else if (data.type === 'chat') {
-        say(data.name || 'Oyuncu', data.text, '#7dd3fc');
+        say(data.name || 'Oyuncu', data.text, '#7dd3fc', data.lvl || 1);
       }
     };
     ws.onclose = () => {
       wsConnected = false;
-      console.log('❌ Bağlantı koptu');
+      console.log('❌ Bağlantı koptu, 3 sn sonra tekrar denenecek');
       wsReconnectT = 3;
     };
     ws.onerror = (e) => console.log('WS hata:', e);
@@ -919,33 +932,18 @@ function wsSend(obj) {
     try { ws.send(JSON.stringify(obj)); } catch (e) {}
   }
 }
+
 // ============================================================ MINIMAP state
-const MINIMAP = {
-  open: true,
-  size: 160,
-  minSize: 90,
-  maxSize: 300,
-  step: 20,
-  range: 6500,
-};
+const MINIMAP = { open: true, size: 160, minSize: 90, maxSize: 300, step: 20, range: 6500 };
 
 // ============================================================ VOICE CHAT state
 const VOICE = {
-  on: false,
-  permitted: 'unknown',
-  stream: null, srcNode: null, analyser: null, freq: null,
-  level: 0, peak: 0,
-  speaking: false, silentFor: 0,
-  mode: 'toggle',
-  pttHeld: false,
-  sensitivity: 0.10,
-  deviceId: null, devices: [],
-  panel: false,
-  sttOn: false, recognizer: null, sttInterim: '',
-  bubble: null,
-  errMsg: '',
-  voicedSinceStart: 0,
-  lastCmdTime: 0,
+  on: false, permitted: 'unknown', stream: null, srcNode: null, analyser: null, freq: null,
+  level: 0, peak: 0, speaking: false, silentFor: 0,
+  mode: 'toggle', pttHeld: false, sensitivity: 0.10,
+  deviceId: null, devices: [], panel: false,
+  sttOn: false, recognizer: null, sttInterim: '', bubble: null,
+  errMsg: '', voicedSinceStart: 0, lastCmdTime: 0,
 };
 
 async function refreshVoiceDevices() {
@@ -955,7 +953,6 @@ async function refreshVoiceDevices() {
     VOICE.devices = list.filter(d => d.kind === 'audioinput');
   } catch(e) { VOICE.devices = []; }
 }
-
 async function enableVoice() {
   if (VOICE.on) return;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -1002,9 +999,7 @@ function startSTT() {
   try {
     if (VOICE.recognizer) { try { VOICE.recognizer.stop(); } catch(e){} }
     const rec = new SR();
-    rec.lang = 'tr-TR';
-    rec.continuous = true;
-    rec.interimResults = true;
+    rec.lang = 'tr-TR'; rec.continuous = true; rec.interimResults = true;
     rec.onresult = e => {
       let finalText = '', interim = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -1015,7 +1010,8 @@ function startSTT() {
       if (finalText.trim()) {
         VOICE.sttInterim = '';
         const cleaned = finalText.trim();
-        say('🎤 ' + p.name, cleaned, '#ffe066');
+        say('🎤 ' + p.name, cleaned, '#ffe066', p.lvl);
+        wsSend({ type: 'chat', name: p.name, lvl: p.lvl, text: '🎤 ' + cleaned });
         if (VOICE.bubble) VOICE.bubble.text = cleaned;
         else VOICE.bubble = { text: cleaned, life: 3 };
         processVoiceCommand(cleaned.toLowerCase());
@@ -1078,20 +1074,13 @@ function updateVoice(dt) {
   const loud = VOICE.level > threshold;
   if (loud && wantsSpeak) {
     VOICE.silentFor = 0;
-    if (!VOICE.speaking) {
-      VOICE.speaking = true;
-      if (!VOICE.bubble) VOICE.bubble = { text: '', life: 1.2 };
-      VOICE.voicedSinceStart = 0;
-    }
+    if (!VOICE.speaking) { VOICE.speaking = true; if (!VOICE.bubble) VOICE.bubble = { text: '', life: 1.2 }; VOICE.voicedSinceStart = 0; }
     VOICE.voicedSinceStart += dt;
   } else {
     VOICE.silentFor += dt;
     if (VOICE.speaking && VOICE.silentFor > 0.4) VOICE.speaking = false;
   }
-  if (VOICE.bubble) {
-    VOICE.bubble.life -= dt;
-    if (VOICE.bubble.life <= 0) VOICE.bubble = null;
-  }
+  if (VOICE.bubble) { VOICE.bubble.life -= dt; if (VOICE.bubble.life <= 0) VOICE.bubble = null; }
   if (!VOICE.speaking && VOICE.bubble && !VOICE.bubble.text) VOICE.bubble.text = '';
 }
 
@@ -1108,7 +1097,11 @@ const ui = { reg: [], mx: 0, my: 0, drag: null, sliderActive: null };
 const region = (x, y, w, h, o) => { o.x = x; o.y = y; o.w = w; o.h = h; ui.reg.push(o); };
 
 function msg(text, col) { chat.push({ n: '', t: text, c: col || '#ffe29a' }); if (chat.length > 80) chat.shift(); }
-function say(name, text, col) { chat.push({ n: name, t: text, c: col || '#9bd8ff' }); if (chat.length > 80) chat.shift(); }
+function say(name, text, col, lvl) {
+  const displayName = lvl ? '[Lv.' + lvl + '] ' + name : name;
+  chat.push({ n: displayName, t: text, c: col || '#9bd8ff' });
+  if (chat.length > 80) chat.shift();
+}
 function say_banner(t, c) { banner = { t, c: c || '#ffd66b', l: 3 }; }
 
 function newChar(name, cls, king, saved) {
@@ -1192,18 +1185,13 @@ function makeBridges() {
 }
 function inRiver(x, y) {
   for (const r of RIVERS) {
-    if (r.type === 'h') {
-      if (Math.abs(y - riverY(x, r)) < r.w / 2) return r;
-    } else {
-      if (Math.abs(x - riverX(y, r)) < r.w / 2) return r;
-    }
+    if (r.type === 'h') { if (Math.abs(y - riverY(x, r)) < r.w / 2) return r; }
+    else { if (Math.abs(x - riverX(y, r)) < r.w / 2) return r; }
   }
   return null;
 }
 function onBridge(x, y) {
-  for (const b of BRIDGES) {
-    if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) return b;
-  }
+  for (const b of BRIDGES) { if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) return b; }
   return null;
 }
 function makeMinimap() {
@@ -1215,11 +1203,8 @@ function makeMinimap() {
   g.strokeStyle = '#2e7dd1'; g.lineWidth = 2.5;
   RIVERS.forEach(r => {
     g.beginPath();
-    if (r.type === 'h') {
-      for (let x = 0; x <= WORLD; x += WORLD/40) { const y = riverY(x, r) * k; if (x === 0) g.moveTo(x*k, y); else g.lineTo(x*k, y); }
-    } else {
-      for (let y = 0; y <= WORLD; y += WORLD/40) { const x = riverX(y, r) * k; if (y === 0) g.moveTo(x, y*k); else g.lineTo(x, y*k); }
-    }
+    if (r.type === 'h') { for (let x = 0; x <= WORLD; x += WORLD/40) { const y = riverY(x, r) * k; if (x === 0) g.moveTo(x*k, y); else g.lineTo(x*k, y); } }
+    else { for (let y = 0; y <= WORLD; y += WORLD/40) { const x = riverX(y, r) * k; if (y === 0) g.moveTo(x, y*k); else g.lineTo(x, y*k); } }
     g.stroke();
   });
   g.fillStyle = '#6b6b68';
@@ -1537,16 +1522,16 @@ cv.addEventListener('mousedown', e => {
 cv.addEventListener('wheel', e => { Z = clamp(Z * (e.deltaY < 0 ? 1.08 : .92), .5, 1.5); e.preventDefault(); }, { passive: false });
 window.addEventListener('keydown', e => {
   if (!started) return; const k = e.key.toLowerCase();
-  if (SETTINGS.open) {
-    if (k === 'escape') { SETTINGS.open = false; e.preventDefault(); }
-    return;
-  }
-  if (VOICE.panel) {
-    if (k === 'escape' || (k === 'v' && e.shiftKey)) { VOICE.panel = false; e.preventDefault(); }
-    return;
-  }
+  if (SETTINGS.open) { if (k === 'escape') { SETTINGS.open = false; e.preventDefault(); } return; }
+  if (VOICE.panel) { if (k === 'escape' || (k === 'v' && e.shiftKey)) { VOICE.panel = false; e.preventDefault(); } return; }
   if (chatMode) {
-    if (k === 'enter') {   if (chatBuf.trim()) {     say(p.name, chatBuf.trim(), '#ffffff');     wsSend({ type: 'chat', name: p.name, text: chatBuf.trim() });   }   chatBuf = ''; chatMode = false; }
+    if (k === 'enter') {
+      if (chatBuf.trim()) {
+        say(p.name, chatBuf.trim(), '#ffffff', p.lvl);
+        wsSend({ type: 'chat', name: p.name, lvl: p.lvl, text: chatBuf.trim() });
+      }
+      chatBuf = ''; chatMode = false;
+    }
     else if (k === 'escape') { chatBuf = ''; chatMode = false; }
     else if (k === 'backspace') chatBuf = chatBuf.slice(0, -1);
     else if (e.key.length === 1 && chatBuf.length < 70) chatBuf += e.key;
@@ -1682,9 +1667,16 @@ function update(dt) {
     else if (a.kind === 'ember') { a.x += Math.sin(T * 3 + (a.ph || 0)) * 20 * dt; a.y += a.vy * dt; }
     else { a.x += a.vx * dt; a.y += a.vy * dt; }
     if (a.l <= 0 || a.y > cam.y + VH / Z + 60 || a.y < cam.y - 80 || a.x < cam.x - 80 || a.x > cam.x + VW / Z + 80) ambient.splice(i, 1);
-    // ---- Multiplayer: pozisyon gönder + bağlantı kontrolü ----
-  if (wsConnected && p && !p.dead) {
-    wsSend({ type: 'move', x: Math.round(p.x), y: Math.round(p.y), face: p.face, name: p.name });
+  }
+  ambientTick(dt);
+  musicTick(dt);
+  drumTick(dt);
+
+  // ---- Multiplayer: pozisyon gönder (10 Hz) + bağlantı kontrolü ----
+  wsSendT -= dt;
+  if (wsConnected && p && !p.dead && wsSendT <= 0) {
+    wsSendT = 0.1;
+    wsSend({ type: 'move', x: Math.round(p.x), y: Math.round(p.y), face: p.face, name: p.name, lvl: p.lvl, cls: p.cls, king: p.king, hp: Math.ceil(p.hp), maxhp: p.maxhp });
   }
   if (!wsConnected && wsReconnectT > 0) {
     wsReconnectT -= dt;
@@ -1695,10 +1687,7 @@ function update(dt) {
   for (const [id, rp] of remotePlayers) {
     if (nowMs - rp.lastSeen > 5000) remotePlayers.delete(id);
   }
-}
-  ambientTick(dt);
-  musicTick(dt);
-  drumTick(dt);
+
   const h = ui.reg.length && ui.reg.some(r => ui.mx >= r.x && ui.mx <= r.x + r.w && ui.my >= r.y && ui.my <= r.y + r.h && (r.block || r.l || r.r)) ? null : pickAt(cam.x + ui.mx / Z, cam.y + ui.my / Z);
   hoverEnt = h; cv.style.cursor = h ? (h.k === 'mon' || h.k === 'stone' ? 'crosshair' : 'pointer') : 'default';
 }
@@ -1908,12 +1897,7 @@ function worldPass(dt) {
   }
   for (const b of BRIDGES) {
     if (b.x < vx - 250 || b.x > vx + vw + 250 || b.y < vy - 250 || b.y > vy + vh + 250) continue;
-    add(b.y + 1, () => {
-      ctx.save();
-      ctx.translate(b.x, b.y);
-      spr(b.sprite, 0, 0, 1);
-      ctx.restore();
-    });
+    add(b.y + 1, () => { ctx.save(); ctx.translate(b.x, b.y); spr(b.sprite, 0, 0, 1); ctx.restore(); });
   }
   for (const d of drops) {
     if (d.x < vx - 40 || d.x > vx + vw + 40 || d.y < vy - 40 || d.y > vy + vh + 40) continue;
@@ -1951,27 +1935,27 @@ function worldPass(dt) {
     if (m.flash > 0 && !m.dead) { ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = m.flash * 3; drawMonsterBody(ctx, m, m.tt); ctx.globalCompositeOperation = 'source-over'; }
     ctx.restore();
     if (!m.dead) { const ty = m.y - 56 * m.sc; nameTag(m.x, ty - 8, (m.boss ? MT[m.t].boss : MT[m.t].n) + '  Lv.' + m.lvl, m.boss ? '#ff6b6b' : lvlCol(m.lvl), m.boss ? 13 : 11); if (m.hp < m.maxhp || hov || p.target === m) hpBar(m.x, ty, m.boss ? 60 : 38, m.hp, m.maxhp, m.boss ? '#ef4444' : '#e11d48'); if (m.poison > 0) { ctx.fillStyle = '#84cc16'; ctx.beginPath(); ctx.arc(m.x + 24, ty + 2, 3, 0, 7); ctx.fill(); } } }); }
-   // ---- Uzak oyuncuları çiz ----
+
+  // ---- Uzak oyuncuları çiz (kendi sınıfı + isim + seviye) ----
   for (const [id, rp] of remotePlayers) {
     if (rp.x < vx - 80 || rp.x > vx + vw + 80 || rp.y < vy - 100 || rp.y > vy + vh + 100) continue;
-    const dt0 = performance.now();
-    if (!rp.mvT) rp.mvT = 0;
-    // Basit hareket tespiti (pozisyon son 100 ms'de değiştiyse yürüyor)
     if (rp._px !== undefined && Math.abs(rp.x - rp._px) + Math.abs(rp.y - rp._py) > 1) rp.mv = true;
     else rp.mv = false;
     rp._px = rp.x; rp._py = rp.y;
     rp.t = (rp.t || 0) + dt;
     add(rp.y, () => {
-      const o = Object.assign(
-        outfit(p.cls || 'warrior', {}, (KING.length > 1 ? 1 : 0)),
-        { x: rp.x, y: rp.y, face: rp.face || 1, t: rp.t, mv: rp.mv, atk: 0 }
-      );
-      // Farklı tonla göster
-      o.armor = '#2563eb'; o.cape = '#3b82f6';
+      const rpCls = rp.cls || 'warrior';
+      const rpKing = rp.king !== undefined ? rp.king : 0;
+      const baseOutfit = outfit(rpCls, {}, rpKing);
+      baseOutfit.armor = mix(baseOutfit.armor, '#3b82f6', .45);
+      baseOutfit.cape = '#60a5fa';
+      const o = Object.assign(baseOutfit, { x: rp.x, y: rp.y, face: rp.face || 1, t: rp.t, mv: rp.mv, atk: 0 });
       humanoid(ctx, o);
-      nameTag(rp.x, rp.y - 64, rp.name || 'Oyuncu', '#7dd3fc', 12);
+      nameTag(rp.x, rp.y - 64, '[Lv.' + (rp.lvl || 1) + '] ' + (rp.name || 'Oyuncu'), '#7dd3fc', 12);
+      if (rp.hp !== undefined && rp.maxhp && rp.hp < rp.maxhp) hpBar(rp.x, rp.y - 56, 40, rp.hp, rp.maxhp, '#ef4444');
     });
   }
+
   add(p.y, () => {
     if (p.dead) { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(-1.4); ctx.translate(-p.x, -p.y + 8); }
     const o = Object.assign(outfit(p.cls, p.eq, p.king), { x: p.x, y: p.y, face: p.face, t: p.t, mv: p.mv, atk: p.anim });
@@ -2135,38 +2119,27 @@ WIN.skl = w => {
   const x = w.x, y = w.y;
   const allAt10 = allSkillsAt10();
   const totalLv = p.sk[0] + p.sk[1] + p.sk[2] + p.sk[3];
-
-  // ---- Header: Skill points + Total + Gold ----
   ctx.fillStyle = 'rgba(0,0,0,.35)';
   rr(ctx, x + 14, y + 40, w.w - 28, 38, 6); ctx.fill();
   ctx.strokeStyle = '#8a6a2a'; ctx.lineWidth = 1.5; ctx.stroke();
-
   T_('✨ Yetenek Puanı', x + 26, y + 55, '#c9b27a', 10, 'left');
   T_(String(p.skp), x + 26, y + 70, p.skp > 0 ? '#86efac' : '#6e6048', 16, 'left', true);
-
   T_('Toplam', x + w.w/2, y + 55, '#c9b27a', 10, 'center');
   T_(totalLv + '/80', x + w.w/2, y + 70, allAt10 ? '#fde047' : '#c9b27a', 16, 'center', true);
-
   T_('Yang', x + w.w - 26, y + 55, '#c9b27a', 10, 'right');
   T_(String(p.gold), x + w.w - 26, y + 70, p.gold >= 10000 ? '#fde047' : '#c9b27a', 14, 'right', true);
-
-  // ---- Skill cards ----
   const cardH = 100;
   SK[p.cls].forEach((s, i) => {
     const yy = y + 84 + i * (cardH + 6);
     const lv = p.sk[i];
     const tier = skillTier(lv);
     const isMastery = lv >= 10;
-
-    // Card bg
     const cardBg = ctx.createLinearGradient(x + 12, yy, x + 12, yy + cardH);
     if (isMastery) { cardBg.addColorStop(0, 'rgba(90,55,10,.55)'); cardBg.addColorStop(1, 'rgba(30,15,5,.65)'); }
     else           { cardBg.addColorStop(0, 'rgba(45,32,20,.45)'); cardBg.addColorStop(1, 'rgba(15,10,5,.55)'); }
     ctx.fillStyle = cardBg; rr(ctx, x + 12, yy, w.w - 24, cardH, 6); ctx.fill();
     ctx.strokeStyle = tier.c; ctx.lineWidth = isMastery ? 2 : 1.4;
     rr(ctx, x + 12, yy, w.w - 24, cardH, 6); ctx.stroke();
-
-    // Icon frame
     const ic = x + 22, iy = yy + 12;
     ctx.fillStyle = 'rgba(0,0,0,.65)';
     rr(ctx, ic - 3, iy - 3, 58, 58, 5); ctx.fill();
@@ -2174,20 +2147,12 @@ WIN.skl = w => {
     rr(ctx, ic - 3, iy - 3, 58, 58, 5); ctx.stroke();
     skillIcon(ctx, s, ic, iy, 52, p.cls);
     region(ic - 3, iy - 3, 58, 58, { tip: () => skillTip(s, i), block: true });
-
-    // Level badge
     const lvBX = ic + 42, lvBY = iy + 42;
     ctx.fillStyle = tier.c; ctx.beginPath(); ctx.arc(lvBX, lvBY, 12, 0, 7); ctx.fill();
     ctx.strokeStyle = '#1a0d00'; ctx.lineWidth = 1.5; ctx.stroke();
     T_(String(lv), lvBX, lvBY + 5, '#1a0d00', 12, 'center', true);
-
-    // Right content
     const rx = x + 90;
-
-    // Name
     T_(s.n, rx, yy + 18, isMastery ? tier.c : '#ffe9a8', 14, 'left', true);
-
-    // Tier badge
     ctx.font = 'bold 14px Georgia';
     const nameW = ctx.measureText(s.n).width;
     const bx = rx + nameW + 10, by = yy + 7;
@@ -2197,11 +2162,7 @@ WIN.skl = w => {
     rr(ctx, bx, by, tierW, 14, 3); ctx.fill();
     ctx.strokeStyle = tier.c; ctx.lineWidth = 1; ctx.stroke();
     T_(tier.n, bx + tierW/2, by + 10, tier.c, 9, 'center', true);
-
-    // Description
     T_(s.d, rx, yy + 33, '#a89572', 10, 'left');
-
-    // Progress bar (20 segments)
     const pbX = rx, pbY = yy + 42, pbW = w.w - 90 - 24 - 62, pbH = 10;
     ctx.fillStyle = 'rgba(0,0,0,.6)';
     rr(ctx, pbX, pbY, pbW, pbH, 3); ctx.fill();
@@ -2215,21 +2176,14 @@ WIN.skl = w => {
     }
     ctx.strokeStyle = tier.c; ctx.lineWidth = 1;
     rr(ctx, pbX, pbY, pbW, pbH, 3); ctx.stroke();
-    // 10/20 mark
     ctx.strokeStyle = 'rgba(255,255,255,.4)'; ctx.lineWidth = 1;
     ln(ctx, pbX + pbW/2, pbY - 2, pbX + pbW/2, pbY + pbH + 2);
-    // Progress text
     T_('Lv ' + lv + ' / 20', pbX + pbW/2, pbY + pbH + 12, tier.c, 10, 'center', true);
-
-    // Info row
     const infoY = yy + cardH - 8;
     T_('💧 ' + Math.round(s.mp * (1 + .06 * (lv - 1))), pbX, infoY, '#8ec5ff', 10, 'left');
     T_('⏱ ' + s.cd + 's', pbX + 66, infoY, '#c9b27a', 10, 'left');
     if (s.m) T_('⚔ %' + Math.round(s.m * (1 + .14 * (lv - 1)) * 100), pbX + 128, infoY, '#ffb36b', 10, 'left');
-
-    // Upgrade button
     const btnX = x + w.w - 66, btnY = yy + 42, btnW = 50, btnH = 46;
-
     if (lv >= 20) {
       ctx.fillStyle = 'rgba(0,0,0,.5)';
       rr(ctx, btnX, btnY, btnW, btnH, 4); ctx.fill();
@@ -2289,10 +2243,7 @@ WIN.skl = w => {
       });
     }
   });
-
-  // ---- Footer ----
   if (!allAt10) {
-    const minSk = Math.min(p.sk[0], p.sk[1], p.sk[2], p.sk[3]);
     const ready = p.sk.filter(v => v >= 10).length;
     T_('⭐ Ustalık için tüm yetenekler 10 olmalı (' + ready + '/4 hazır)', x + w.w/2, y + w.h - 12, '#c9b27a', 10, 'center', true);
   } else {
@@ -2404,9 +2355,7 @@ function micIcon(x, y, sz, on, speaking) {
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(cx, cy, (r + 2) * pulse, 0, 7); ctx.stroke();
   }
-  if (VOICE.mode === 'ptt') {
-    T_('PTT', x + sz - 3, y + 10, '#7dd3fc', 8, 'right', true);
-  }
+  if (VOICE.mode === 'ptt') T_('PTT', x + sz - 3, y + 10, '#7dd3fc', 8, 'right', true);
   if (on) {
     const lv = clamp(VOICE.level * 3, 0, 1);
     ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(x + 4, y + sz - 6, sz - 8, 3);
@@ -2417,16 +2366,14 @@ function micIcon(x, y, sz, on, speaking) {
 function hud() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   const cx = VW / 2, n = 8, ss = 44, gap = 5, sw = n * (ss + gap) - gap, orbR = 46, barW = sw + orbR * 4 + 56, x0 = cx - barW / 2, y0 = VH - 92;
-   // Bağlantı durumu göstergesi (sağ üst köşe)
-  if (WS_URL && !WS_URL.includes('SENIN-RENDER-URLIN')) {
-    const dotX = VW - 30, dotY = VH - 20;
-    ctx.beginPath(); ctx.arc(dotX, dotY, 5, 0, 7);
-    ctx.fillStyle = wsConnected ? '#22c55e' : '#ef4444';
-    ctx.fill();
-    ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5; ctx.stroke();
-    T_(wsConnected ? 'Online (' + (remotePlayers.size + 1) + ')' : 'Bağlanıyor...',
-       dotX - 10, dotY + 4, wsConnected ? '#86efac' : '#fca5a5', 10, 'right', true);
-  }
+  // Online göstergesi
+  const dotX = VW - 30, dotY = VH - 20;
+  ctx.beginPath(); ctx.arc(dotX, dotY, 5, 0, 7);
+  ctx.fillStyle = wsConnected ? '#22c55e' : '#ef4444';
+  ctx.fill();
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5; ctx.stroke();
+  T_(wsConnected ? 'Online (' + (remotePlayers.size + 1) + ')' : 'Bağlanıyor...',
+     dotX - 10, dotY + 4, wsConnected ? '#86efac' : '#fca5a5', 10, 'right', true);
   const bg = ctx.createLinearGradient(0, y0, 0, VH); bg.addColorStop(0, '#3b2a18'); bg.addColorStop(1, '#17100a'); ctx.fillStyle = bg; rr(ctx, x0, y0, barW, 86, 10); ctx.fill(); ctx.fillStyle = PANPAT; ctx.globalAlpha = .6; ctx.fill(); ctx.globalAlpha = 1;
   ctx.strokeStyle = '#8a6a2a'; ctx.lineWidth = 3; rr(ctx, x0, y0, barW, 86, 10); ctx.stroke(); ctx.strokeStyle = '#e3b755'; ctx.lineWidth = 1; rr(ctx, x0 + 4, y0 + 4, barW - 8, 78, 8); ctx.stroke();
   region(x0, y0 - 20, barW, 112, { block: true });
@@ -2445,7 +2392,6 @@ function hud() {
       const cd = p.cds[d.i];
       if (cd > 0) { ctx.fillStyle = 'rgba(0,0,0,.65)'; const hh = (ss - 4) * clamp(cd / d.s.cd, 0, 1); ctx.fillRect(x + 2, sy + 2, ss - 4, hh); T_(cd.toFixed(cd < 10 ? 1 : 0), x + ss / 2, sy + ss / 2 + 5, '#fff', 13, 'center', true); }
       else if (p.mp < d.s.mp * (1 + .06 * (p.sk[d.i] - 1))) { ctx.fillStyle = 'rgba(0,0,60,.5)'; ctx.fillRect(x + 2, sy + 2, ss - 4, ss - 4); }
-      // Mastery indicator
       if (p.sk[d.i] >= 10) {
         const tier = skillTier(p.sk[d.i]);
         ctx.strokeStyle = tier.c; ctx.lineWidth = 2;
@@ -2468,11 +2414,7 @@ function hud() {
     if (b[2] === 'bag') { ctx.beginPath(); ctx.arc(0, 4, 10, 0, 7); ctx.fill(); ctx.fillRect(-5, -10, 10, 5); } else if (b[2] === 'man') { ctx.beginPath(); ctx.arc(0, -6, 5, 0, 7); ctx.fill(); ctx.beginPath(); ctx.arc(0, 12, 10, Math.PI, 0); ctx.fill(); } else { ctx.fillRect(-9, -9, 18, 18); ctx.strokeStyle = '#2a1c0f'; ln(ctx, 0, -9, 0, 9); }
     ctx.restore();
     if (b[0] === 'skl' && p.skp > 0) { ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.arc(x + 34, y + 6, 7, 0, 7); ctx.fill(); T_(String(p.skp), x + 34, y + 10, '#fff', 10, 'center', true); }
-    // Mastery star badge on skill button
-    if (b[0] === 'skl' && allSkillsAt10()) {
-      ctx.fillStyle = '#fde047';
-      drawStar(ctx, x + 6, y + 6, 7, 3.4, 5);
-    }
+    if (b[0] === 'skl' && allSkillsAt10()) { ctx.fillStyle = '#fde047'; drawStar(ctx, x + 6, y + 6, 7, 3.4, 5); }
     region(x, y, 40, 40, { l: () => toggleWin(b[0]), tip: () => [{ t: b[1], c: '#ffe9a8' }], block: true });
   });
   const vbX = VW - 12 - 4 * 46, vbY = VH - 52;
@@ -2480,15 +2422,11 @@ function hud() {
   region(vbX, vbY, 40, 40, {
     l: () => { toggleVoice(); },
     r: () => { VOICE.panel = true; SFX.click(); },
-    tip: () => [{ t: VOICE.on ? 'Sesli Sohbet: AÇIK' : 'Sesli Sohbet: KAPALI', c: VOICE.on ? '#86efac' : '#fca5a5', b: 1 },
-                { t: 'Sol tık: Aç/Kapat', c: '#ccc' },
-                { t: 'Sağ tık: Ayarlar paneli', c: '#ccc' },
-                { t: 'V tuşu ile de açılır', c: '#999' },
-                { t: VOICE.mode === 'ptt' ? 'Mod: Bas-Konuş (V basılı tut)' : 'Mod: Sürekli dinleme', c: '#7dd3fc' }],
+    tip: () => [{ t: VOICE.on ? 'Sesli Sohbet: AÇIK' : 'Sesli Sohbet: KAPALI', c: VOICE.on ? '#86efac' : '#fca5a5', b: 1 }, { t: 'Sol tık: Aç/Kapat', c: '#ccc' }, { t: 'Sağ tık: Ayarlar', c: '#ccc' }, { t: 'V tuşu', c: '#999' }],
     block: true
   });
 
-  // ============================================================ MINIMAP
+  // MINIMAP
   const ms = MINIMAP.size, mx = VW - ms - 12, my = 12;
   if (MINIMAP.open) {
     const k = ms / WORLD;
@@ -2510,19 +2448,10 @@ function hud() {
     ctx.setLineDash([4, 6]);
     ctx.beginPath(); ctx.arc(px, py, rangePx, 0, 7); ctx.stroke();
     ctx.setLineDash([]);
-    stones.forEach(s => {
-      const sx = mx + s.x * k, sy = my + s.y * k;
-      ctx.fillStyle = 'rgba(192,132,252,.85)';
-      ctx.beginPath(); ctx.arc(sx, sy, 3.5, 0, 7); ctx.fill();
-      ctx.strokeStyle = '#2e1065'; ctx.lineWidth = 1; ctx.stroke();
-    });
-    npcs.forEach(n => {
-      const sx = mx + n.x * k, sy = my + n.y * k;
-      ctx.fillStyle = '#ffe066';
-      ctx.fillRect(sx - 2, sy - 2, 4, 4);
-      ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
-      ctx.strokeRect(sx - 2, sy - 2, 4, 4);
-    });
+    stones.forEach(s => { const sx = mx + s.x * k, sy = my + s.y * k; ctx.fillStyle = 'rgba(192,132,252,.85)'; ctx.beginPath(); ctx.arc(sx, sy, 3.5, 0, 7); ctx.fill(); ctx.strokeStyle = '#2e1065'; ctx.lineWidth = 1; ctx.stroke(); });
+    npcs.forEach(n => { const sx = mx + n.x * k, sy = my + n.y * k; ctx.fillStyle = '#ffe066'; ctx.fillRect(sx - 2, sy - 2, 4, 4); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.strokeRect(sx - 2, sy - 2, 4, 4); });
+    // Uzak oyuncuları minimap'te göster
+    remotePlayers.forEach(rp => { const sx = mx + rp.x * k, sy = my + rp.y * k; ctx.fillStyle = '#7dd3fc'; ctx.beginPath(); ctx.arc(sx, sy, 3.5, 0, 7); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke(); });
     let nearbyCount = 0;
     monsters.forEach(m => {
       if (m.dead) return;
@@ -2538,9 +2467,6 @@ function hud() {
         ctx.fillStyle = '#ff2222';
         ctx.beginPath(); ctx.arc(sx, sy, 5.5 * pulse, 0, 7); ctx.fill();
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
-        ctx.strokeStyle = `rgba(255,80,80,${alpha * 0.7})`;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 7); ctx.stroke();
       } else {
         ctx.fillStyle = m.aggro ? '#ff3355' : '#ff8080';
         ctx.beginPath(); ctx.arc(sx, sy, 3, 0, 7); ctx.fill();
@@ -2548,11 +2474,6 @@ function hud() {
       }
     });
     ctx.globalAlpha = 1;
-    if (VOICE.speaking) {
-      const lv = clamp(VOICE.level * 4, 0, 1);
-      ctx.strokeStyle = `rgba(255,224,102,${0.5 + lv * 0.5})`; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(px, py, 8 + lv * 4, 0, 7); ctx.stroke();
-    }
     ctx.fillStyle = '#fff';
     ctx.beginPath(); ctx.arc(px, py, 4.5, 0, 7); ctx.fill();
     ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5; ctx.stroke();
@@ -2564,8 +2485,8 @@ function hud() {
     const wm = { clear:'Açık', rain:'Yağmurlu', snow:'Karlı', leaves:'Yapraklı', wind:'Rüzgârlı', fog:'Sisli' }[WEATHER.kind];
     T_(z, mx + ms / 2, my + ms + 15, '#ffe9a8', 12, 'center', true);
     T_(String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0') + '   ' + wm, mx + ms / 2, my + ms + 29, '#a89572', 10, 'center');
-    T_('Yakın: ' + nearbyCount + ' canavar', mx + 6, my + ms + 44, '#ffb0b0', 10, 'left', true);
-    T_('Metin: ' + stones.length, mx + ms - 6, my + ms + 44, '#c084fc', 10, 'right', true);
+    T_('Yakın: ' + nearbyCount, mx + 6, my + ms + 44, '#ffb0b0', 10, 'left', true);
+    T_('Online: ' + (remotePlayers.size + 1), mx + ms - 6, my + ms + 44, '#7dd3fc', 10, 'right', true);
     const ccx = mx + ms - 20, ccy = my + 2;
     const chov = ui.mx >= ccx && ui.mx <= ccx + 18 && ui.my >= ccy && ui.my <= ccy + 18;
     ctx.fillStyle = chov ? '#dc3b3b' : '#9b2323';
@@ -2620,18 +2541,10 @@ function hud() {
   if (tg) { const w = 320, x = cx - w / 2, y = 12, nm = tg.isStone ? (METIN_NAMES[tg.tier - 1] || 'Metin Taşı') : (tg.boss ? MT[tg.t].boss : MT[tg.t].n); ctx.fillStyle = 'rgba(15,8,4,.85)'; rr(ctx, x, y, w, 46, 6); ctx.fill(); ctx.strokeStyle = '#8a6a2a'; ctx.lineWidth = 2; ctx.stroke();
     T_(nm, x + 12, y + 18, tg.boss ? '#ff6b6b' : '#ffe9a8', 14, 'left', true); T_('Lv.' + tg.lvl, x + w - 12, y + 18, lvlCol(tg.lvl), 13, 'right', true); ctx.fillStyle = '#000'; ctx.fillRect(x + 12, y + 26, w - 24, 14); const g = ctx.createLinearGradient(0, y + 26, 0, y + 40); g.addColorStop(0, '#ff6a6a'); g.addColorStop(1, '#a01818'); ctx.fillStyle = g; ctx.fillRect(x + 12, y + 26, (w - 24) * clamp(tg.hp / tg.maxhp, 0, 1), 14); ctx.strokeStyle = '#d6a845'; ctx.strokeRect(x + 11.5, y + 25.5, w - 23, 15); T_(Math.ceil(tg.hp) + ' / ' + tg.maxhp, cx, y + 37, '#fff', 10, 'center', true); }
   p.buffs.forEach((b, i) => { const x = 12 + i * 38, y = 12; ctx.fillStyle = 'rgba(20,40,70,.8)'; ctx.fillRect(x, y, 34, 34); ctx.strokeStyle = '#7dd3fc'; ctx.strokeRect(x + .5, y + .5, 33, 33); T_('+', x + 17, y + 22, '#7dd3fc', 20, 'center', true); T_(Math.ceil(b.t) + 's', x + 17, y + 31, '#fff', 9, 'center'); region(x, y, 34, 34, { tip: () => [{ t: b.name, c: '#7dd3fc', b: 1 }, { t: Math.ceil(b.t) + ' saniye kaldı', c: '#ccc' }], block: true }); });
-  if (p.bonusAtk || p.bonusDef || p.bonusHp || p.hasRevive) {
-    let bx = VW - 12 - 46 * 4 - 12;
-    const by = VH - 100;
-    if (p.hasRevive) { T_('★ Diriliş', bx, by, '#c084fc', 11, 'right', true); bx -= 62; }
-    if (p.bonusHp) { T_('+' + p.bonusHp + ' HP', bx, by, '#ff8a8a', 11, 'right', true); bx -= 62; }
-    if (p.bonusDef) { T_('+' + p.bonusDef + ' DEF', bx, by, '#8ec5ff', 11, 'right', true); bx -= 62; }
-    if (p.bonusAtk) { T_('+' + p.bonusAtk + ' ATK', bx, by, '#ffb36b', 11, 'right', true); }
-  }
   const chx = 10, chh = 168, chy = VH - chh - 10, chw = Math.min(400, Math.max(260, cx - barW / 2 - 24));
   ctx.fillStyle = 'rgba(0,0,0,.45)'; rr(ctx, chx, chy, chw, chh, 6); ctx.fill(); ctx.strokeStyle = 'rgba(138,106,42,.8)'; ctx.lineWidth = 1.5; ctx.stroke(); region(chx, chy, chw, chh, { block: true });
   ctx.save(); ctx.beginPath(); ctx.rect(chx, chy, chw, chh); ctx.clip(); const lines = chat.slice(-9); lines.forEach((c, i) => { const yy = chy + 18 + i * 15; ctx.font = '12px Georgia'; ctx.textAlign = 'left'; if (c.n) { T_(c.n + ':', chx + 8, yy, c.c, 12, 'left', true); const w2 = ctx.measureText(c.n + ': ').width; T_(c.t, chx + 8 + w2, yy, '#e8e0cc', 12); } else T_(c.t, chx + 8, yy, c.c, 12); }); ctx.restore();
-  ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(chx + 4, chy + chh - 24, chw - 8, 20); T_(chatMode ? chatBuf + (Math.floor(T * 2) % 2 ? '|' : '') : 'Enter: sohbet · V: sesli sohbet · K: yetenekler · N: harita · ESC: ayarlar', chx + 10, chy + chh - 9, chatMode ? '#fff' : '#7c6f55', 11);
+  ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(chx + 4, chy + chh - 24, chw - 8, 20); T_(chatMode ? chatBuf + (Math.floor(T * 2) % 2 ? '|' : '') : 'Enter: sohbet · V: sesli sohbet · N: harita · ESC: ayarlar', chx + 10, chy + chh - 9, chatMode ? '#fff' : '#7c6f55', 11);
   if (banner) { const a = clamp(banner.l, 0, 1), sc = 1 + (1 - clamp(banner.l / 3, 0, 1)) * .05; ctx.globalAlpha = a; ctx.font = 'bold ' + Math.round(34 * sc) + 'px Georgia'; ctx.textAlign = 'center'; ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(0,0,0,.9)'; ctx.strokeText(banner.t, cx, VH * .26); ctx.fillStyle = banner.c; ctx.fillText(banner.t, cx, VH * .26); ctx.globalAlpha = 1; }
 }
 function windows() {
@@ -2702,16 +2615,13 @@ function voicePanelRender() {
   ctx.strokeStyle = '#7a5a22'; ctx.lineWidth = 3; ctx.strokeRect(x + 1.5, y + 1.5, w - 3, h - 3);
   ctx.strokeStyle = '#e3b755'; ctx.lineWidth = 1; ctx.strokeRect(x + 5, y + 5, w - 10, h - 10);
   region(x, y, w, h, { block: true });
-
   T_('🎤 SESLİ SOHBET', x + w / 2, y + 42, '#ffe9a8', 22, 'center', true);
   const stText = VOICE.on ? 'AÇIK' : (VOICE.permitted === 'denied' ? 'İZİN GEREKLİ' : 'KAPALI');
   const stCol = VOICE.on ? '#86efac' : (VOICE.permitted === 'denied' ? '#fca5a5' : '#c9b27a');
   T_('Durum: ' + stText, x + w / 2, y + 64, stCol, 12, 'center', true);
   if (VOICE.errMsg) T_(VOICE.errMsg, x + w / 2, y + 80, '#fca5a5', 10, 'center');
-
   const mbX = x + 32, mbY = y + 96, mbW = w - 64, mbH = 46;
   btn(mbX, mbY, mbW, mbH, VOICE.on ? '🎤  Mikrofonu Kapat' : '🎤  Mikrofonu Aç', () => toggleVoice(), true);
-
   const lvY = mbY + mbH + 14;
   T_('Mikrofon Seviyesi', x + 32, lvY, '#ffe9a8', 12, 'left', true);
   T_(VOICE.speaking ? '● KONUŞUYORSUN' : 'Sessiz', x + w - 32, lvY, VOICE.speaking ? '#86efac' : '#8a7c5e', 12, 'right', true);
@@ -2725,22 +2635,18 @@ function voicePanelRender() {
   ctx.strokeStyle = '#ffe066'; ctx.lineWidth = 2;
   ln(ctx, tMarkX, lvBoxY - 2, tMarkX, lvBoxY + 18);
   T_('Hassasiyet eşiği', tMarkX, lvBoxY + 30, '#ffe066', 9, 'center', true);
-
   T_('Hassasiyet', x + 32, lvBoxY + 50, '#ffe9a8', 12, 'left', true);
   T_(Math.round(VOICE.sensitivity * 100) + '%', x + w - 32, lvBoxY + 50, '#c9b27a', 12, 'right', true);
   slider(x + 32, lvBoxY + 58, w - 64, clamp(VOICE.sensitivity / 0.5, 0, 1), v => { VOICE.sensitivity = v * 0.5; });
-
   const modeY = lvBoxY + 96;
   T_('Konuşma Modu', x + 32, modeY, '#ffe9a8', 12, 'left', true);
   const modeText = VOICE.mode === 'ptt' ? 'Bas-Konuş (V tuşunu basılı tut)' : 'Sürekli Dinleme';
   btn(x + 32, modeY + 6, w - 64, 32, modeText, () => { VOICE.mode = VOICE.mode === 'ptt' ? 'toggle' : 'ptt'; msg('Mod: ' + (VOICE.mode === 'ptt' ? 'Bas-Konuş' : 'Sürekli'), '#7dd3fc'); SFX.click(); }, true);
-
   const sttY = modeY + 48;
   T_('Ses Tanıma (Web Speech API)', x + 32, sttY, '#ffe9a8', 12, 'left', true);
   const sttSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
   btn(x + 32, sttY + 6, w - 64, 32, VOICE.sttOn ? '🗣️  Ses Tanıma: AÇIK' : '🗣️  Ses Tanıma: KAPALI', () => { if (!sttSupported) { msg('Bu tarayıcı ses tanımayı desteklemiyor.', '#fca5a5'); return; } toggleSTT(); }, sttSupported);
   if (!sttSupported) T_('(Desteklenmiyor - Chrome/Edge dene)', x + 32, sttY + 52, '#8a7c5e', 10);
-
   const devY = sttY + 60;
   T_('Mikrofon Cihazı', x + 32, devY, '#ffe9a8', 12, 'left', true);
   if (!VOICE.devices.length) {
@@ -2756,13 +2662,11 @@ function voicePanelRender() {
       region(x + 32, dy, w - 64, 20, { l: () => { VOICE.deviceId = d.deviceId; if (VOICE.on) { disableVoice(); setTimeout(enableVoice, 200); } msg('Cihaz seçildi.', '#86efac'); }, block: true });
     });
   }
-
   const helpY = devY + 100;
   ctx.fillStyle = 'rgba(0,0,0,.35)'; rr(ctx, x + 24, helpY - 8, w - 48, 60, 4); ctx.fill();
   T_('🎤 Sesli Komutlar (Ses tanıma açıkken):', x + 32, helpY + 6, '#ffe066', 11, 'left', true);
   T_('"saldır" · "dur" · "iyileştir" · "mana" · "envanter" · "karakter"', x + 32, helpY + 22, '#c9b27a', 10);
   T_('"yetenek" · "topla" · "şehir" · "birinci/ikinci/üçüncü/dördüncü"', x + 32, helpY + 36, '#c9b27a', 10);
-
   btn(x + w / 2 - 70, y + h - 44, 140, 32, 'Kapat (ESC)', () => { VOICE.panel = false; });
 }
 function tooltip() {
@@ -2795,7 +2699,6 @@ function startGame(name, cls, king, saved) {
   newChar(name, cls, king, saved); initWorld();
   cam.x = p.x - VW / 2; cam.y = p.y - VH / 2; started = true; last = performance.now();
   try { ac(); initMusic(); initAmbient(); applyAudioSettings(); refreshVoiceDevices(); } catch(e){}
-   // Çok oyunculu sunucuya bağlan
   connectToServer();
   document.getElementById('menu').style.display = 'none';
 }
