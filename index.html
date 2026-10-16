@@ -890,18 +890,20 @@ function connectToServer() {
         wsId = data.id;
         data.players.forEach(pl => {
           if (pl.id === wsId) return;
-          remotePlayers.set(pl.id, {
-            x: pl.x, y: pl.y, face: pl.face || 1,
-            name: pl.name || 'Oyuncu', lvl: pl.lvl || 1,
-            cls: pl.cls || 'warrior', king: pl.king || 0,
-            hp: pl.hp || 100, maxhp: pl.maxhp || 100,
-            mv: false, t: 0, lastSeen: performance.now()
+        remotePlayers.set(pl.id, {
+          x: pl.x, y: pl.y, tx: pl.x, ty: pl.y,
+          face: pl.face || 1,
+          name: pl.name || 'Oyuncu', lvl: pl.lvl || 1,
+          cls: pl.cls || 'warrior', king: pl.king || 0,
+          hp: pl.hp || 100, maxhp: pl.maxhp || 100,
+          mv: false, t: 0, lastSeen: performance.now()
           });
         });
       } else if (data.type === 'player') {
         if (data.id === wsId) return;
         const existing = remotePlayers.get(data.id) || { name: 'Oyuncu', lvl: 1, cls: 'warrior', king: 0, t: 0, mv: false };
-        existing.x = data.x; existing.y = data.y; existing.face = data.face || 1;
+        existing.tx = data.x; existing.ty = data.y; existing.face = data.face || 1;
+if (existing.x === undefined) { existing.x = data.x; existing.y = data.y; }
         existing.name = data.name || existing.name;
         existing.lvl = data.lvl || existing.lvl || 1;
         existing.cls = data.cls || existing.cls || 'warrior';
@@ -1673,15 +1675,11 @@ function update(dt) {
   drumTick(dt);
 
   // ---- Multiplayer: pozisyon gönder (10 Hz) + bağlantı kontrolü ----
-  wsSendT -= dt;
-  if (wsConnected && p && !p.dead && wsSendT <= 0) {
-    wsSendT = 0.1;
-    wsSend({ type: 'move', x: Math.round(p.x), y: Math.round(p.y), face: p.face, name: p.name, lvl: p.lvl, cls: p.cls, king: p.king, hp: Math.ceil(p.hp), maxhp: p.maxhp });
-  }
-  if (!wsConnected && wsReconnectT > 0) {
-    wsReconnectT -= dt;
-    if (wsReconnectT <= 0) { wsReconnectT = 0; connectToServer(); }
-  }
+ wsSendT -= dt;
+if (wsConnected && p && !p.dead && wsSendT <= 0) {
+  wsSendT = 0.05; // 20 Hz (önceden 0.1 = 10 Hz)
+  wsSend({ type: 'move', x: Math.round(p.x), y: Math.round(p.y), face: p.face, name: p.name, lvl: p.lvl, cls: p.cls, king: p.king, hp: Math.ceil(p.hp), maxhp: p.maxhp });
+}
   // Uzak oyuncuların zaman aşımı (5 sn)
   const nowMs = performance.now();
   for (const [id, rp] of remotePlayers) {
@@ -1937,13 +1935,19 @@ function worldPass(dt) {
     if (!m.dead) { const ty = m.y - 56 * m.sc; nameTag(m.x, ty - 8, (m.boss ? MT[m.t].boss : MT[m.t].n) + '  Lv.' + m.lvl, m.boss ? '#ff6b6b' : lvlCol(m.lvl), m.boss ? 13 : 11); if (m.hp < m.maxhp || hov || p.target === m) hpBar(m.x, ty, m.boss ? 60 : 38, m.hp, m.maxhp, m.boss ? '#ef4444' : '#e11d48'); if (m.poison > 0) { ctx.fillStyle = '#84cc16'; ctx.beginPath(); ctx.arc(m.x + 24, ty + 2, 3, 0, 7); ctx.fill(); } } }); }
 
   // ---- Uzak oyuncuları çiz (kendi sınıfı + isim + seviye) ----
-  for (const [id, rp] of remotePlayers) {
-    if (rp.x < vx - 80 || rp.x > vx + vw + 80 || rp.y < vy - 100 || rp.y > vy + vh + 100) continue;
-    if (rp._px !== undefined && Math.abs(rp.x - rp._px) + Math.abs(rp.y - rp._py) > 1) rp.mv = true;
-    else rp.mv = false;
-    rp._px = rp.x; rp._py = rp.y;
-    rp.t = (rp.t || 0) + dt;
-    add(rp.y, () => {
+for (const [id, rp] of remotePlayers) {
+  if (rp.x < vx - 80 || rp.x > vx + vw + 80 || rp.y < vy - 100 || rp.y > vy + vh + 100) continue;
+  // ---- Yumuşak interpolasyon ----
+  if (rp.tx !== undefined) {
+    const k = Math.min(1, dt * 18); // 18 = yumuşatma hızı (yüksek = daha çevik)
+    const dx = rp.tx - rp.x, dy = rp.ty - rp.y;
+    rp.x += dx * k;
+    rp.y += dy * k;
+    // Hareket ediyor mu? (kalan mesafeye bak)
+    rp.mv = (Math.abs(dx) + Math.abs(dy)) > 0.8;
+  }
+  rp.t = (rp.t || 0) + dt;
+  add(rp.y, () => {
       const rpCls = rp.cls || 'warrior';
       const rpKing = rp.king !== undefined ? rp.king : 0;
       const baseOutfit = outfit(rpCls, {}, rpKing);
