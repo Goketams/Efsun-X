@@ -973,14 +973,6 @@ function onWsMessage(ev) {
     return;
   }
 }
-    ws.onclose = () => {
-      wsConnected = false;
-      console.log('❌ Bağlantı koptu');
-      wsReconnectT = 3;
-    };
-    ws.onerror = (e) => console.log('WS hata:', e);
-  } catch (e) { console.log('Bağlantı kurulamadı:', e); }
-}
 
 function wsSend(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) {
