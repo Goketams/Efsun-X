@@ -871,107 +871,47 @@ const remotePlayers = new Map(); // id -> { x, y, face, name, mv, t, lastSeen }
 let wsReconnectT = 0;
 
 function connectToServer() {
-  if (!WS_URL || WS_URL.includes('SENIN-RENDER-URLIN')) return;
+  if (!WS_URL || WS_URL.includes('https://efsun-x.onrender.com/')) {
+    console.log('WebSocket URL ayarlanmamış, tek oyunculu mod.');
+    return;
+  }
   try {
     ws = new WebSocket(WS_URL);
-    ws.onopen = onWsOpen;
-    ws.onmessage = onWsMessage;
-    ws.onclose = onWsClose;
-    ws.onerror = onWsError;
-  } catch (e) {
-    console.log('Bağlantı kurulamadı:', e);
-  }
-}
-
-function onWsOpen() {
-  wsConnected = true;
-  console.log('✅ Sunucuya bağlandı');
-  msg('Çok oyunculu sunucuya bağlandın!', '#86efac');
-}
-
-function onWsClose() {
-  wsConnected = false;
-  console.log('❌ Bağlantı koptu');
-  wsReconnectT = 3;
-}
-
-function onWsError(e) {
-  console.log('WS hata:', e);
-}
-
-function onWsMessage(ev) {
-  let data;
-  try { data = JSON.parse(ev.data); } catch (err) { return; }
-  
-  if (data.type === 'welcome') {
-    wsId = data.id;
-    data.players.forEach(pl => {
-      if (pl.id === wsId) return;
-      remotePlayers.set(pl.id, {
-        x: pl.x, y: pl.y, face: pl.face || 1,
-        name: pl.name || 'Oyuncu', lvl: pl.lvl || 1,
-        cls: pl.cls || 'warrior', king: pl.king || 0,
-        hp: pl.hp || 100, maxhp: pl.maxhp || 100,
-        mv: false, t: 0, lastSeen: performance.now()
-      });
-    });
-    return;
-  }
-  
-  if (data.type === 'player') {
-    if (data.id === wsId) return;
-    const existing = remotePlayers.get(data.id) || { t: 0, mv: false };
-    existing.x = data.x; existing.y = data.y; existing.face = data.face || 1;
-    existing.name = data.name || existing.name || 'Oyuncu';
-    existing.lvl = data.lvl || existing.lvl || 1;
-    existing.cls = data.cls || existing.cls || 'warrior';
-    existing.king = data.king !== undefined ? data.king : (existing.king || 0);
-    existing.hp = data.hp !== undefined ? data.hp : (existing.hp || 100);
-    existing.maxhp = data.maxhp !== undefined ? data.maxhp : (existing.maxhp || 100);
-    existing.lastSeen = performance.now();
-    remotePlayers.set(data.id, existing);
-    return;
-  }
-  
-  if (data.type === 'leave') {
-    const rp = remotePlayers.get(data.id);
-    if (rp) msg((rp.name || 'Bir oyuncu') + ' oyundan ayrıldı.', '#9ca3af');
-    remotePlayers.delete(data.id);
-    return;
-  }
-  
-  if (data.type === 'chat') {
-    say(data.name || 'Oyuncu', data.text, '#7dd3fc', data.lvl || 1);
-    return;
-  }
-  
-  if (data.type === 'attack') {
-    if (data.x !== undefined && data.y !== undefined) {
-      fx.push({ k: 'ring', x: data.x, y: data.y, r: 5, max: 40, c: '#ff8080' });
-    }
-    return;
-  }
-  
-  if (data.type === 'stoneHit') {
-    const localStone = stones[data.stoneIdx];
-    if (localStone && !localStone.dead) {
-      localStone.hp -= data.dmg;
-      localStone.act = 12;
-      floatText(localStone.x + R(-8, 8), localStone.y - 100, data.dmg, '#ffd34d');
-      burst(localStone.x, localStone.y - 30, 6, '#c084fc', 70, .4, 2);
-      if (localStone.hp <= 0) kill(localStone);
-    }
-    return;
-  }
-  
-  if (data.type === 'stoneDead') {
-    const localStone = stones[data.stoneIdx];
-    if (localStone && !localStone.dead) {
-      localStone.hp = 0;
-      kill(localStone);
-    }
-    return;
-  }
+    ws.onopen = () => {
+      wsConnected = true;
+      console.log('✅ Sunucuya bağlandı');
+      msg('Çok oyunculu sunucuya bağlandın!', '#86efac');
+    };
+    ws.onmessage = (ev) => {
+      let data;
+      try { data = JSON.parse(ev.data); } catch (e) { return; }
+      if (data.type === 'welcome') {
+        wsId = data.id;
+        data.players.forEach(pl => {
+          if (pl.id === wsId) return;
+          remotePlayers.set(pl.id, { x: pl.x, y: pl.y, face: 1, name: pl.name || 'Oyuncu', mv: false, t: 0, lastSeen: performance.now() });
+        });
+      } else if (data.type === 'player') {
+        if (data.id === wsId) return;
+        const existing = remotePlayers.get(data.id) || { name: data.name || 'Oyuncu', t: 0, mv: false };
+        existing.x = data.x; existing.y = data.y; existing.face = data.face || 1;
+        existing.name = data.name || existing.name;
+        existing.lastSeen = performance.now();
+        remotePlayers.set(data.id, existing);
+      } else if (data.type === 'leave') {
+        remotePlayers.delete(data.id);
+        msg('Bir oyuncu ayrıldı.', '#9ca3af');
+      } else if (data.type === 'chat') {
+        say(data.name || 'Oyuncu', data.text, '#7dd3fc');
+      }
+    };
+    ws.onclose = () => {
+      wsConnected = false;
+      console.log('❌ Bağlantı koptu');
+      wsReconnectT = 3;
+    };
+    ws.onerror = (e) => console.log('WS hata:', e);
+  } catch (e) { console.log('Bağlantı kurulamadı:', e); }
 }
 
 function wsSend(obj) {
@@ -1168,11 +1108,7 @@ const ui = { reg: [], mx: 0, my: 0, drag: null, sliderActive: null };
 const region = (x, y, w, h, o) => { o.x = x; o.y = y; o.w = w; o.h = h; ui.reg.push(o); };
 
 function msg(text, col) { chat.push({ n: '', t: text, c: col || '#ffe29a' }); if (chat.length > 80) chat.shift(); }
-function say(name, text, col, lvl) {
-  const displayName = lvl ? '[Lv.' + lvl + '] ' + name : name;
-  chat.push({ n: displayName, t: text, c: col || '#9bd8ff' });
-  if (chat.length > 80) chat.shift();
-}
+function say(name, text, col) { chat.push({ n: name, t: text, c: col || '#9bd8ff' }); if (chat.length > 80) chat.shift(); }
 function say_banner(t, c) { banner = { t, c: c || '#ffd66b', l: 3 }; }
 
 function newChar(name, cls, king, saved) {
@@ -1335,19 +1271,8 @@ function hurt(e, raw, o = {}) {
   e.hp -= dmg; e.flash = .12;
   floatText(e.x + R(-8, 8), e.y - 38 * (e.sc || 1) - (e.isStone ? 30 : 0), dmg, o.c || (crit ? '#ffd34d' : '#ffffff'), crit);
   burst(e.x, e.y - 16, crit ? 8 : 4, e.isStone ? '#c084fc' : '#ff7b5c', 60, .35, 2);
-   if (e.isStone) e.act = 12; else { e.aggro = true; }
+  if (e.isStone) e.act = 12; else { e.aggro = true; }
   p.combatT = 5; if (!o.dot) SFX.hit();
- 
-   // Ortak hasar: metin taşıysa diğer oyunculara bildir
-  if (e.isStone && wsConnected) {
-    const idx = stones.indexOf(e);
-    if (idx >= 0) {
-      if (e.hp <= 0) {
-        wsSend({ type: 'stoneDead', stoneIdx: idx, x: e.x, y: e.y });
-      } else {
-        wsSend({ type: 'stoneHit', stoneIdx: idx, dmg: dmg, x: e.x, y: e.y });
-      }
-    }
   if (e.hp <= 0) kill(e);
   return dmg;
 }
@@ -1758,14 +1683,9 @@ function update(dt) {
     else { a.x += a.vx * dt; a.y += a.vy * dt; }
     if (a.l <= 0 || a.y > cam.y + VH / Z + 60 || a.y < cam.y - 80 || a.x < cam.x - 80 || a.x > cam.x + VW / Z + 80) ambient.splice(i, 1);
     // ---- Multiplayer: pozisyon gönder + bağlantı kontrolü ----
-if (wsConnected && p && !p.dead) {
-  wsSend({
-    type: 'move',
-    x: Math.round(p.x), y: Math.round(p.y), face: p.face,
-    name: p.name, lvl: p.lvl, cls: p.cls, king: p.king,
-    hp: Math.ceil(p.hp), maxhp: p.maxhp
-  });
-}
+  if (wsConnected && p && !p.dead) {
+    wsSend({ type: 'move', x: Math.round(p.x), y: Math.round(p.y), face: p.face, name: p.name });
+  }
   if (!wsConnected && wsReconnectT > 0) {
     wsReconnectT -= dt;
     if (wsReconnectT <= 0) { wsReconnectT = 0; connectToServer(); }
@@ -2034,28 +1954,22 @@ function worldPass(dt) {
    // ---- Uzak oyuncuları çiz ----
   for (const [id, rp] of remotePlayers) {
     if (rp.x < vx - 80 || rp.x > vx + vw + 80 || rp.y < vy - 100 || rp.y > vy + vh + 100) continue;
+    const dt0 = performance.now();
+    if (!rp.mvT) rp.mvT = 0;
+    // Basit hareket tespiti (pozisyon son 100 ms'de değiştiyse yürüyor)
     if (rp._px !== undefined && Math.abs(rp.x - rp._px) + Math.abs(rp.y - rp._py) > 1) rp.mv = true;
     else rp.mv = false;
     rp._px = rp.x; rp._py = rp.y;
     rp.t = (rp.t || 0) + dt;
     add(rp.y, () => {
-      // Kendi sınıfının görünümüyle çiz (mavi tonla ayırt et)
-      const cls = rp.cls || 'warrior';
-      const kingIdx = rp.king !== undefined ? rp.king : 0;
-      const baseOutfit = outfit(cls, {}, kingIdx);
-      baseOutfit.armor = mix(baseOutfit.armor, '#3b82f6', .45);
-      baseOutfit.cape = '#60a5fa';
-      const o = Object.assign(baseOutfit, {
-        x: rp.x, y: rp.y, face: rp.face || 1, t: rp.t, mv: rp.mv, atk: 0
-      });
+      const o = Object.assign(
+        outfit(p.cls || 'warrior', {}, (KING.length > 1 ? 1 : 0)),
+        { x: rp.x, y: rp.y, face: rp.face || 1, t: rp.t, mv: rp.mv, atk: 0 }
+      );
+      // Farklı tonla göster
+      o.armor = '#2563eb'; o.cape = '#3b82f6';
       humanoid(ctx, o);
-      // İsim + Seviye etiketi
-      const lvCol = lvlCol(rp.lvl || 1);
-      nameTag(rp.x, rp.y - 64, '[Lv.' + (rp.lvl || 1) + '] ' + (rp.name || 'Oyuncu'), '#7dd3fc', 12);
-      // HP barı (canı düşmüşse göster)
-      if (rp.hp !== undefined && rp.hp < rp.maxhp) {
-        hpBar(rp.x, rp.y - 56, 40, rp.hp, rp.maxhp, '#ef4444');
-      }
+      nameTag(rp.x, rp.y - 64, rp.name || 'Oyuncu', '#7dd3fc', 12);
     });
   }
   add(p.y, () => {
