@@ -871,7 +871,7 @@ const remotePlayers = new Map(); // id -> { x, y, face, name, mv, t, lastSeen }
 let wsReconnectT = 0;
 
 function connectToServer() {
-  if (!WS_URL || WS_URL.includes('https://efsun-x.onrender.com/')) {
+  if (!WS_URL || WS_URL.includes('SENIN-RENDER-URLIN')) {
     console.log('WebSocket URL ayarlanmamış, tek oyunculu mod.');
     return;
   }
@@ -884,7 +884,7 @@ function connectToServer() {
     };
     ws.onmessage = (ev) => {
       let data;
-      try { data = JSON.parse(ev.data); } catch (e) { return; }
+      try { data = JSON.parse(ev.data); } catch (err) { return; }
       if (data.type === 'welcome') {
         wsId = data.id;
         data.players.forEach(pl => {
@@ -916,12 +916,10 @@ function connectToServer() {
       } else if (data.type === 'chat') {
         say(data.name || 'Oyuncu', data.text, '#7dd3fc', data.lvl || 1);
       } else if (data.type === 'attack') {
-        // Uzak oyuncunun saldırısını göster
         if (data.x !== undefined && data.y !== undefined) {
           fx.push({ k: 'ring', x: data.x, y: data.y, r: 5, max: 40, c: '#ff8080' });
         }
       } else if (data.type === 'stoneHit') {
-        // Ortak metin taşı hasarı
         const localStone = stones[data.stoneIdx];
         if (localStone && !localStone.dead) {
           localStone.hp -= data.dmg;
@@ -937,6 +935,7 @@ function connectToServer() {
           kill(localStone);
         }
       }
+    };
     ws.onclose = () => {
       wsConnected = false;
       console.log('❌ Bağlantı koptu');
