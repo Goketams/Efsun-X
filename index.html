@@ -1,13 +1,20 @@
 <!doctype html>
-<html lang="en">
+<html lang="tr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>EfsunX Online - Metin2 Edition</title>
 <style>
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: Georgia, 'Times New Roman', serif; user-select: none; -webkit-user-select: none; }
-  canvas#game { display: block; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: Georgia, 'Times New Roman', serif; user-select: none; -webkit-user-select: none; touch-action: none; overscroll-behavior: none; }
+  canvas#game { display: block; touch-action: none; }
+  #rotate { display: none; position: fixed; inset: 0; z-index: 9999; background: radial-gradient(ellipse at 50% 30%, #3a2511 0%, #150d07 60%, #050302 100%); color: #fde68a; align-items: center; justify-content: center; flex-direction: column; gap: 18px; font-size: 22px; text-align: center; padding: 24px; letter-spacing: 1px; }
+  #rotate .icon { font-size: 64px; animation: rot 1.6s ease-in-out infinite; display: inline-block; }
+  @keyframes rot { 0%,100% { transform: rotate(0deg); } 50% { transform: rotate(90deg); } }
+  @media (orientation: portrait) and (max-width: 900px) {
+    body.playing #game { display: none; }
+    body.playing #rotate { display: flex; }
+  }
   #menu { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 14px; align-items: center; justify-content: center; background: radial-gradient(ellipse at 50% 30%, #3a2511 0%, #150d07 60%, #050302 100%); color: #f5d38a; text-align: center; padding: 16px; overflow: auto; }
   #menu h1 { margin: 0; font-size: 54px; letter-spacing: 6px; font-variant: small-caps; background: linear-gradient(#fff3c4, #e0a526 55%, #8a5a0c); -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 3px 0 #2a1704) drop-shadow(0 0 22px #b4570a); }
   #menu .sub { margin-top: -8px; color: #b99358; letter-spacing: 3px; font-size: 13px; }
@@ -31,6 +38,8 @@
 <body>
 <canvas id="game"></canvas>
 
+<div id="rotate"><div class="icon">📱</div><div>Cihazı yan çevir</div><div style="font-size:13px;color:#b99358;letter-spacing:2px">EFSUNX ONLINE YATAY MODDA OYNANIR</div></div>
+
 <div id="menu">
   <h1>EfsunX Online</h1>
   <div class="sub">Hadi Maceraya Katıl</div>
@@ -45,6 +54,7 @@
     <b>Tıkla</b> yürümek için (veya WASD / Ok tuşları) &middot; <b>Shift</b> ile ileri atıl &middot; <b>Tıkla</b> canavarlara, Metin Taşlarına, NPC ve düşen eşyalara<br>
     <b>1-4</b> Yetenekler &middot; <b>5</b> HP İksiri &middot; <b>6</b> MP İksiri &middot; <b>7</b> Işınlanma Parşömeni &middot; <b>Z</b> Yerden Eşya Topla<br>
     <b>I</b> Envanter &middot; <b>C</b> Karakter &middot; <b>K</b> Yetenekler &middot; <b>G</b> Günlük Görevler &middot; <b>L</b> Klan &middot; <b>N</b> Mini Harita &middot; <b>V</b> Sesli Sohbet &middot; <b>Enter</b> Sohbet &middot; <b>ESC</b> Ayarlar<br>
+    <b>Mobil:</b> Sol altta joystick, sağ altta saldırı/dash butonları, üst-sol butonlarla menüler.<br>
     Demircide eşyalarını +9'a bas veya 3 aynı item'ı birleştir. Zindanlara git! İlerlemen otomatik kaydedilir.<br>
     <b>Toprak Tüccarı</b>'ndan Yang ile bölge satın al → pasif gelir!
   </div>
@@ -55,11 +65,39 @@
 'use strict';
 const cv = document.getElementById('game'), ctx = cv.getContext('2d');
 let VW = 800, VH = 600, DPR = 1;
+
+// ═══════════════ MOBİL / DOKUNMATİK DESTEK ═══════════════
+const IS_MOBILE = (/Android|iPhone|iPad|iPod|Mobile|Tablet/i.test(navigator.userAgent)) ||
+  (navigator.maxTouchPoints > 0 && !window.matchMedia('(pointer:fine)').matches);
+let touchActive = false;
+const isTouchUI = () => IS_MOBILE || touchActive;
+const touch = {
+  joy: { active: false, id: null, dx: 0, dy: 0 },
+  action: { active: false, id: null }
+};
+const JOY = { x: 78, y: 0, r: 58 };
+const ACT = { x: 0, y: 0, r: 44 };
+const DASH_BTN = { x: 0, y: 0, r: 28 };
+function updateTouchLayout() {
+  JOY.x = 78; JOY.y = VH - 88;
+  ACT.r = Math.max(34, Math.min(44, VW / 14));
+  ACT.x = VW - 60; ACT.y = VH - 90;
+  DASH_BTN.r = Math.max(20, Math.min(28, VW / 24));
+  DASH_BTN.x = VW - 60; DASH_BTN.y = VH - 90 - ACT.r - DASH_BTN.r - 15;
+}
+function doTouchAction() {
+  if (!p || p.dead) return;
+  const e = nearestEnemy(600);
+  if (e) { p.target = e; p.dest = null; p.pickup = null; p.interact = null; p.portalEnter = null; p.pending = -1; }
+  else pickupNearest();
+}
+
 function rs() {
   DPR = Math.min(2, window.devicePixelRatio || 1);
   VW = window.innerWidth; VH = window.innerHeight;
   cv.width = Math.floor(VW * DPR); cv.height = Math.floor(VH * DPR);
   cv.style.width = VW + 'px'; cv.style.height = VH + 'px';
+  updateTouchLayout();
 }
 window.addEventListener('resize', rs); rs();
 
@@ -409,9 +447,6 @@ function genItem(lvl, boost = 0, forceType) {
 function startWeapon(cls) { const c = CLS[cls]; return { id: uid(), name: 'Eğitim ' + SUBN[c.weapon], type: 'weapon', sub: c.weapon, cls, lvl: 1, tier: 0, rar: 0, atk: 5, def: 0, hp: 0, plus: 0, val: 5 }; }
 const itName = it => it.name + (it.plus ? ' +' + it.plus : '');
 
-// ═══════════════════════════════════════════════════════════
-// YENİLENMİŞ TEXTURE FONKSİYONLARI
-// ═══════════════════════════════════════════════════════════
 function wrapBlob(g, S, x, y, rad, c0, c1) {
   for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
     const X = x + dx * S, Y = y + dy * S; if (X + rad < 0 || X - rad > S || Y + rad < 0 || Y - rad > S) continue;
@@ -1004,9 +1039,6 @@ function buildAssets() {
   ZT.forEach((c, i) => ZG.addColorStop(((i + 1.5) * 2700) / 19000, c)); ZG.addColorStop(1, ZT[5]);
 }
 
-// ═══════════════════════════════════════════════════════════
-// İYİLEŞTİRİLMİŞ KARAKTER ÇİZİMİ
-// ═══════════════════════════════════════════════════════════
 function weaponDraw(g, o, hx, hy, wa, ap) {
   const wk = o.wk, wc = o.wc || '#cbd5e1';
   g.save(); g.translate(hx, hy);
@@ -1342,9 +1374,7 @@ function golemDraw(g, m, t) {
   rr(g, -9, -52 - bob, 18, 16, 4); g.fill();
   g.strokeStyle = 'rgba(0,0,0,.5)'; g.stroke();
   g.fillStyle = '#fbbf24';
-  g.shadowColor = '#fbbf24'; g.shadowBlur = 8;
   g.fillRect(-5, -46 - bob, 3, 3); g.fillRect(2, -46 - bob, 3, 3);
-  g.shadowBlur = 0;
   g.restore();
 }
 function ghostDraw(g, m, t) {
@@ -1650,12 +1680,12 @@ function newChar(name, cls, king, saved) {
   const c = CLS[cls];
   p = { name, cls, king, x: C.x, y: C.y + 180, face: 1, t: 0, mv: false, lvl: 1, xp: 0, gold: 200, hpPot: 5, mpPot: 3, inv: new Array(30).fill(null), eq: {}, sk: [1, 1, 1, 1], skp: 0, kills: 0,
     hp: 1, mp: 1, maxhp: 1, maxmp: 1, atk: 1, def: 0, target: null, dest: null, atkT: 0, anim: 0, combatT: 0, potT: 0, cds: [0, 0, 0, 0], buffs: [], pending: -1, interact: null, pickup: null, quest: null, dead: false, recall: 0, speed: c.speed, footT: 0,
-    bonusAtk: 0, bonusDef: 0, bonusHp: 0, hasRevive: false, portalEnter: null, daily: null,
+    bonusAtk: 0, bonusDef: 0, bonusHp: 0, hasRevive: false, hasRecall: 3, portalEnter: null, daily: null,
     dash: 100, dashMax: 100, dashRegen: 22, dashTime: 0, dashCd: 0, dashDirX: 1, dashDirY: 0,
     clan: null, lands: [], landIncomeAcc: 0 };
   p.eq.weapon = startWeapon(cls);
   if (saved) {
-    ['lvl', 'xp', 'gold', 'hpPot', 'mpPot', 'inv', 'eq', 'sk', 'skp', 'kills', 'quest', 'bonusAtk', 'bonusDef', 'bonusHp', 'hasRevive', 'daily', 'clan', 'lands'].forEach(k => { if (saved[k] !== undefined) p[k] = saved[k]; });
+    ['lvl', 'xp', 'gold', 'hpPot', 'mpPot', 'inv', 'eq', 'sk', 'skp', 'kills', 'quest', 'bonusAtk', 'bonusDef', 'bonusHp', 'hasRevive', 'hasRecall', 'daily', 'clan', 'lands'].forEach(k => { if (saved[k] !== undefined) p[k] = saved[k]; });
     while (p.inv.length < 30) p.inv.push(null);
     if (!p.lands) p.lands = [];
     if (!p.clan) p.clan = null;
@@ -1883,7 +1913,14 @@ function usePotion(kind) {
   else { if (p.mpPot < 1) { SFX.err(); return; } if (p.mp >= p.maxmp) return; p.mpPot--; const h = Math.round(p.maxmp * .45 + 20); p.mp = Math.min(p.maxmp, p.mp + h); floatText(p.x, p.y - 50, '+' + h, '#60a5fa'); }
   p.potT = 1.2; SFX.heal();
 }
-function recallScroll() { if (p.dead) return; if (dist(p, C) < TOWN) return; p.recall = 3; msg('Şehir parşömeni okunuyor...', '#9bd8ff'); }
+function recallScroll() {
+  if (p.dead) return;
+  if (dist(p, C) < TOWN) { msg('Zaten şehirdesin.', '#9ca3af'); return; }
+  if ((p.hasRecall || 0) <= 0) { msg('Parşömenin yok! Kraliyet Tüccarı\'ndan satın al.', '#fca5a5'); SFX.err(); return; }
+  p.hasRecall--;
+  p.recall = 3;
+  msg('Şehir parşömeni okunuyor... (' + p.hasRecall + ' kaldı)', '#9bd8ff');
+}
 function pickupNearest() { let b = null, bd = 250; for (const d of drops) { const q = dist(d, p); if (q < bd) { bd = q; b = d; } } if (b) { p.pickup = b; p.target = null; p.dest = null; } }
 function takeDrop(d) {
   if (d.gold) { p.gold += d.gold; floatText(p.x, p.y - 50, '+' + d.gold + ' yang', '#fde047'); SFX.coin(); progressDaily('gold', d.gold); }
@@ -1997,6 +2034,10 @@ function tryDash() {
   if (keys['s'] || keys['arrowdown']) dy += 1;
   if (keys['a'] || keys['arrowleft']) dx -= 1;
   if (keys['d'] || keys['arrowright']) dx += 1;
+  if (touch.joy.active) {
+    const jd = Math.hypot(touch.joy.dx, touch.joy.dy);
+    if (jd > 12) { dx += touch.joy.dx / jd; dy += touch.joy.dy / jd; }
+  }
   if (!dx && !dy) { dx = p.face || 1; dy = 0; }
   const l = Math.hypot(dx, dy) || 1;
   p.dashDirX = dx / l; p.dashDirY = dy / l;
@@ -2080,14 +2121,56 @@ function openWin(k) {
 }
 function toggleWin(k) { if (wins[k].open) { wins[k].open = false; SFX.click(); } else openWin(k); }
 window.addEventListener('contextmenu', e => e.preventDefault());
-cv.addEventListener('mousemove', e => {
+cv.addEventListener('pointermove', e => {
+  if (touch.joy.active && e.pointerId === touch.joy.id) {
+    const dx = e.clientX - JOY.x, dy = e.clientY - JOY.y;
+    const d = Math.hypot(dx, dy), maxD = JOY.r * 0.85;
+    if (d > maxD) { touch.joy.dx = dx / d * maxD; touch.joy.dy = dy / d * maxD; }
+    else { touch.joy.dx = dx; touch.joy.dy = dy; }
+    return;
+  }
   ui.mx = e.clientX; ui.my = e.clientY;
   if (ui.sliderActive) { ui.sliderActive(e.clientX); return; }
   if (ui.drag) { const w = wins[ui.drag.k]; w.x = clamp(e.clientX - ui.drag.ox, -w.w + 80, VW - 80); w.y = clamp(e.clientY - ui.drag.oy, 0, VH - 40); }
 });
-window.addEventListener('mouseup', () => { ui.drag = null; ui.sliderActive = null; });
-cv.addEventListener('mousedown', e => {
-  if (!started) return; ui.mx = e.clientX; ui.my = e.clientY; ac();
+window.addEventListener('pointerup', e => {
+  if (touch.joy.active && e.pointerId === touch.joy.id) {
+    touch.joy.active = false; touch.joy.id = null; touch.joy.dx = 0; touch.joy.dy = 0;
+    return;
+  }
+  if (touch.action.active && e.pointerId === touch.action.id) {
+    touch.action.active = false; touch.action.id = null;
+    return;
+  }
+  if (e.pointerType === 'touch') { ui.mx = -1; ui.my = -1; }
+  ui.drag = null; ui.sliderActive = null;
+});
+window.addEventListener('pointercancel', e => {
+  if (touch.joy.active && e.pointerId === touch.joy.id) { touch.joy.active = false; touch.joy.id = null; touch.joy.dx = 0; touch.joy.dy = 0; }
+  if (touch.action.active && e.pointerId === touch.action.id) { touch.action.active = false; touch.action.id = null; }
+  ui.drag = null; ui.sliderActive = null;
+});
+cv.addEventListener('pointerdown', e => {
+  if (!started) return;
+  if (e.pointerType === 'touch') touchActive = true;
+  ui.mx = e.clientX; ui.my = e.clientY; ac();
+  if (isTouchUI()) {
+    if (Math.hypot(e.clientX - JOY.x, e.clientY - JOY.y) < JOY.r * 1.4) {
+      touch.joy.active = true; touch.joy.id = e.pointerId; touch.joy.dx = 0; touch.joy.dy = 0;
+      try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+      e.preventDefault(); return;
+    }
+    if (Math.hypot(e.clientX - ACT.x, e.clientY - ACT.y) < ACT.r * 1.35) {
+      touch.action.active = true; touch.action.id = e.pointerId;
+      doTouchAction();
+      try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+      e.preventDefault(); return;
+    }
+    if (Math.hypot(e.clientX - DASH_BTN.x, e.clientY - DASH_BTN.y) < DASH_BTN.r * 1.35) {
+      tryDash();
+      e.preventDefault(); return;
+    }
+  }
   if (SETTINGS.open || VOICE.panel) {
     for (let i = ui.reg.length - 1; i >= 0; i--) {
       const r = ui.reg[i]; if (e.clientX < r.x || e.clientX > r.x + r.w || e.clientY < r.y || e.clientY > r.y + r.h) continue;
@@ -2106,7 +2189,7 @@ cv.addEventListener('mousedown', e => {
   }
   if (e.button === 0) worldClick(e.clientX, e.clientY);
   else if (e.button === 2 && !p.dead) { const wx = cam.x + e.clientX / Z, wy = cam.y + e.clientY / Z; p.dest = { x: clamp(wx, 30, WORLD - 30), y: clamp(wy, 30, WORLD - 30) }; p.target = null; p.pickup = null; p.interact = null; p.portalEnter = null; }
-});
+}, { passive: false });
 cv.addEventListener('wheel', e => { Z = clamp(Z * (e.deltaY < 0 ? 1.08 : .92), .5, 1.5); e.preventDefault(); }, { passive: false });
 window.addEventListener('keydown', e => {
   if (!started) return; const k = e.key.toLowerCase();
@@ -2162,6 +2245,8 @@ function spawnAmbient() {
   if (w === 'rain') { ambient.push({ x, y: cam.y - 40, vy: R(680, 900), vx: R(-70, -30), l: R(.9, 1.4), m: 1.4, kind: 'rain', c: 'rgba(180,215,255,.65)', s: R(1, 1.4) }); return; }
   if (w === 'snow') { ambient.push({ x, y: cam.y - 20, vy: R(50, 90), vx: R(-25, 25), l: 6, m: 6, kind: 'snow', c: 'rgba(240,250,255,.9)', s: R(1.4, 2.6), ph: R(0, 9) }); return; }
   if (w === 'leaves') { ambient.push({ x, y: cam.y - 20, vy: R(38, 65), vx: R(-45, 45), l: 7, m: 7, kind: 'leaf', c: `hsl(${RI(20, 45)},80%,${RI(40, 55)}%)`, s: R(2, 3.4), ph: R(0, 9), rot: R(0, 6.28), rv: R(-2, 2) }); return; }
+  if (w === 'wind') { ambient.push({ x: cam.x - 40, y: cam.y + R(0, VH / Z), vy: R(-25, 25), vx: R(120, 220), l: 3, m: 3, kind: 'leaf', c: `hsla(${RI(30, 50)},${60 + RI(0, 30)}%,${RI(45, 65)}%,.55)`, s: R(1.2, 2.6), ph: R(0, 9), rot: R(0, 6.28), rv: R(-5, 5) }); return; }
+  if (w === 'fog') { ambient.push({ x, y, vy: R(-6, 6), vx: R(6, 20), l: 4, m: 4, kind: 'dust', c: 'rgba(200,210,235,.18)', s: R(4, 8), ph: R(0, 9) }); return; }
   if (z === 1) { if (isNight) ambient.push({ x, y, vy: R(-15, 10), vx: R(-15, 15), l: 3 + R(0, 3), m: 6, kind: 'firefly', c: 'hsl(50,100%,65%)', s: R(1.2, 2.2), ph: R(0, 9) }); else if (Math.random() < .35) ambient.push({ x, y, vy: R(-6, 6), vx: R(-6, 6), l: 4 + R(0, 3), m: 7, kind: 'dust', c: 'rgba(255,245,220,.55)', s: R(.6, 1.2), ph: R(0, 9) }); }
   else if (z === 2 || z === 3) { if (Math.random() < .35) ambient.push({ x, y, vy: R(20, 40), vx: R(-30, 30), l: 6, m: 6, kind: 'leaf', c: z === 3 ? 'hsl(28,80%,52%)' : 'hsl(108,55%,42%)', s: R(1.8, 3), ph: R(0, 9), rot: R(0, 6.28), rv: R(-2, 2) }); if (isNight) ambient.push({ x, y, vy: R(-8, 8), vx: R(-10, 10), l: 3 + R(0, 3), m: 6, kind: 'firefly', c: 'hsl(55,100%,62%)', s: R(1, 1.8), ph: R(0, 9) }); }
   else if (z === 4) { if (Math.random() < .5) ambient.push({ x, y, vy: R(30, 55), vx: R(-20, 20), l: 5 + R(0, 3), m: 8, kind: 'snow', c: 'rgba(245,250,255,.8)', s: R(1, 2), ph: R(0, 9) }); }
@@ -2230,12 +2315,25 @@ function update(dt) {
   if (!wsConnected && wsReconnectT > 0) { wsReconnectT -= dt; if (wsReconnectT <= 0) { wsReconnectT = 0; connectToServer(); } }
   const nowMs = performance.now();
   for (const [id, rp] of remotePlayers) if (nowMs - rp.lastSeen > 5000) remotePlayers.delete(id);
-  const h = ui.reg.length && ui.reg.some(r => ui.mx >= r.x && ui.mx <= r.x + r.w && ui.my >= r.y && ui.my <= r.y + r.h && (r.block || r.l || r.r)) ? null : pickAt(cam.x + ui.mx / Z, cam.y + ui.my / Z);
-  hoverEnt = h; cv.style.cursor = h ? (h.k === 'mon' || h.k === 'stone' ? 'crosshair' : 'pointer') : 'default';
+  const nowPick = performance.now();
+  if (!window.__pickCache || nowPick - window.__pickCache.t > 80) {
+    const h = ui.reg.length && ui.reg.some(r => ui.mx >= r.x && ui.mx <= r.x + r.w && ui.my >= r.y && ui.my <= r.y + r.h && (r.block || r.l || r.r)) ? null : pickAt(cam.x + ui.mx / Z, cam.y + ui.my / Z);
+    window.__pickCache = { t: nowPick, h };
+  }
+  hoverEnt = window.__pickCache.h;
+  cv.style.cursor = hoverEnt ? (hoverEnt.k === 'mon' || hoverEnt.k === 'stone' ? 'crosshair' : 'pointer') : 'default';
 }
 function updatePlayer(dt) {
   const cl = CLS[p.cls]; let kx = 0, ky = 0;
   if (keys['w'] || keys['arrowup']) ky -= 1; if (keys['s'] || keys['arrowdown']) ky += 1; if (keys['a'] || keys['arrowleft']) kx -= 1; if (keys['d'] || keys['arrowright']) kx += 1;
+  if (touch.joy.active) {
+    const jd = Math.hypot(touch.joy.dx, touch.joy.dy);
+    if (jd > 12) {
+      const f = clamp((jd - 12) / (JOY.r * 0.85 - 12), 0, 1);
+      kx += (touch.joy.dx / jd) * f;
+      ky += (touch.joy.dy / jd) * f;
+    }
+  }
   const px = p.x, py = p.y;
   if (p.dashTime > 0) {
     p.dashTime -= dt;
@@ -2271,9 +2369,14 @@ function finishPlayerMove(dt, px, py) {
 }
 function updateMonsters(dt) {
   const inTown = dist(p, C) < TOWN;
+  const cullX = VW / Z + 300, cullY = VH / Z + 300;
   for (let i = monsters.length - 1; i >= 0; i--) {
     const m = monsters[i]; m.tt += dt;
     if (m.dead) { m.dtime -= dt; if (m.dtime <= 0) monsters.splice(i, 1); continue; }
+    if (Math.abs(m.x - p.x) > cullX || Math.abs(m.y - p.y) > cullY) {
+      if (!m.aggro) { m.wt -= dt; if (m.wt <= 0) { m.wt = R(2, 5); m.wx = m.hx + R(-150, 150); m.wy = m.hy + R(-150, 150); } }
+      continue;
+    }
     m.atkT -= dt; m.anim = Math.max(0, m.anim - dt * 2.5); m.flash = Math.max(0, m.flash - dt);
     if (m.poison > 0) { m.poison -= dt; m.pt = (m.pt || 0) - dt; if (m.pt <= 0) { m.pt = .8; hurt(m, m.pdmg, { dot: true, c: '#a3e635' }); if (m.dead) continue; } }
     const d = dist(m, p), home = Math.hypot(m.x - m.hx, m.y - m.hy);
@@ -2295,7 +2398,7 @@ function updateMonsters(dt) {
 }
 
 const SAVEK = 'sqo_metin2_save_v4';
-function save() { try { if (!p) return; localStorage.setItem(SAVEK, JSON.stringify({ name: p.name, cls: p.cls, king: p.king, lvl: p.lvl, xp: p.xp, gold: p.gold, hpPot: p.hpPot, mpPot: p.mpPot, inv: p.inv, eq: p.eq, sk: p.sk, skp: p.skp, kills: p.kills, quest: p.quest, bonusAtk: p.bonusAtk, bonusDef: p.bonusDef, bonusHp: p.bonusHp, hasRevive: p.hasRevive, daily: p.daily, clan: p.clan, lands: p.lands })); } catch (e) {} }
+function save() { try { if (!p) return; localStorage.setItem(SAVEK, JSON.stringify({ name: p.name, cls: p.cls, king: p.king, lvl: p.lvl, xp: p.xp, gold: p.gold, hpPot: p.hpPot, mpPot: p.mpPot, inv: p.inv, eq: p.eq, sk: p.sk, skp: p.skp, kills: p.kills, quest: p.quest, bonusAtk: p.bonusAtk, bonusDef: p.bonusDef, bonusHp: p.bonusHp, hasRevive: p.hasRevive, hasRecall: p.hasRecall, daily: p.daily, clan: p.clan, lands: p.lands })); } catch (e) {} }
 function loadSave() { try { const s = localStorage.getItem(SAVEK); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
 window.addEventListener('beforeunload', save);
 
@@ -2914,17 +3017,69 @@ function micIcon(x, y, sz, on, speaking) {
   ctx.fillStyle = on ? '#0f1a0f' : '#0f0a08'; ctx.beginPath(); ctx.arc(cx, cy - 3, 2.4, 0, 7); ctx.fill();
   if (speaking && on) { const pulse = 1 + Math.sin(T * 8) * .15; ctx.strokeStyle = `rgba(255,224,102,${.6 * (1 + Math.sin(T*8))/2 + .3})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, (sz/2 - 2 + 2) * pulse, 0, 7); ctx.stroke(); }
 }
+function drawTouchUI() {
+  // Joystick
+  const jx = JOY.x, jy = JOY.y, jr = JOY.r;
+  ctx.fillStyle = 'rgba(0,0,0,.35)';
+  ctx.beginPath(); ctx.arc(jx, jy, jr, 0, 7); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,214,107,.55)'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(jx, jy, jr, 0, 7); ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,214,107,.25)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(jx, jy, jr * .55, 0, 7); ctx.stroke();
+  const kx = jx + touch.joy.dx, ky = jy + touch.joy.dy;
+  const kg = ctx.createRadialGradient(kx - 6, ky - 6, 2, kx, ky, 26);
+  kg.addColorStop(0, 'rgba(255,236,180,.95)'); kg.addColorStop(.6, 'rgba(214,168,69,.85)'); kg.addColorStop(1, 'rgba(90,58,18,.85)');
+  ctx.fillStyle = kg; ctx.beginPath(); ctx.arc(kx, ky, 26, 0, 7); ctx.fill();
+  ctx.strokeStyle = '#ffd66b'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(kx, ky, 26, 0, 7); ctx.stroke();
+  if (touch.joy.active && (touch.joy.dx || touch.joy.dy)) {
+    const a = Math.atan2(touch.joy.dy, touch.joy.dx);
+    ctx.strokeStyle = 'rgba(255,214,107,.7)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(jx, jy, jr * .8, a - .3, a + .3); ctx.stroke();
+  }
+
+  // Action (attack)
+  const ax = ACT.x, ay = ACT.y, ar = ACT.r;
+  const ag = ctx.createRadialGradient(ax - 8, ay - 10, 3, ax, ay, ar);
+  if (touch.action.active) { ag.addColorStop(0, '#ffe066'); ag.addColorStop(.5, '#c8791a'); ag.addColorStop(1, '#5a2a04'); }
+  else { ag.addColorStop(0, '#c8791a'); ag.addColorStop(.6, '#8a4f10'); ag.addColorStop(1, '#3a1e04'); }
+  ctx.fillStyle = ag; ctx.beginPath(); ctx.arc(ax, ay, ar, 0, 7); ctx.fill();
+  ctx.strokeStyle = '#ffd66b'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(ax, ay, ar, 0, 7); ctx.stroke();
+  ctx.save(); ctx.translate(ax, ay); ctx.rotate(-Math.PI / 4);
+  ctx.strokeStyle = '#fff3c4'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-12, 6); ctx.lineTo(12, -12); ctx.stroke();
+  ctx.strokeStyle = '#c99a3a'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(-8, 2); ctx.lineTo(-4, 6); ctx.stroke();
+  ctx.restore();
+  region(ax - ar, ay - ar, ar * 2, ar * 2, { block: true });
+
+  // Dash
+  const dx = DASH_BTN.x, dy = DASH_BTN.y, dr = DASH_BTN.r;
+  const canDash = p.dash >= 30 && p.dashCd <= 0;
+  const dg = ctx.createRadialGradient(dx - 4, dy - 4, 2, dx, dy, dr);
+  if (canDash) { dg.addColorStop(0, '#a5f3fc'); dg.addColorStop(.6, '#0891b2'); dg.addColorStop(1, '#083344'); }
+  else { dg.addColorStop(0, '#475569'); dg.addColorStop(.6, '#334155'); dg.addColorStop(1, '#0f172a'); }
+  ctx.fillStyle = dg; ctx.beginPath(); ctx.arc(dx, dy, dr, 0, 7); ctx.fill();
+  ctx.strokeStyle = canDash ? '#7dd3fc' : '#64748b'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(dx, dy, dr, 0, 7); ctx.stroke();
+  ctx.fillStyle = canDash ? '#fff' : '#94a3b8'; ctx.font = 'bold 20px Georgia'; ctx.textAlign = 'center';
+  ctx.fillText('⚡', dx, dy + 7);
+  region(dx - dr, dy - dr, dr * 2, dr * 2, { block: true });
+}
 function hud() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  const cx = VW / 2, n = 8, ss = 44, gap = 5, sw = n * (ss + gap) - gap, orbR = 46, barW = sw + orbR * 4 + 56, x0 = cx - barW / 2, y0 = VH - 92;
+  const mob = isTouchUI();
+  const ss = mob ? Math.max(24, Math.min(32, Math.floor(VW / 22))) : 44;
+  const gap = mob ? 3 : 5;
+  const orbR = mob ? Math.max(22, Math.min(32, Math.floor(VW / 25))) : 46;
+  const cx = VW / 2, n = 8, sw = n * (ss + gap) - gap, barW = sw + orbR * 4 + 56, x0 = cx - barW / 2, y0 = mob ? VH - 86 : VH - 92;
   const dotX = VW - 30, dotY = VH - 20;
   ctx.beginPath(); ctx.arc(dotX, dotY, 5, 0, 7); ctx.fillStyle = wsConnected ? '#22c55e' : '#ef4444'; ctx.fill();
   T_(wsConnected ? 'Online (' + (remotePlayers.size + 1) + ')' : 'Bağlanıyor...', dotX - 10, dotY + 4, wsConnected ? '#86efac' : '#fca5a5', 10, 'right', true);
   const bg = ctx.createLinearGradient(0, y0, 0, VH); bg.addColorStop(0, '#3b2a18'); bg.addColorStop(1, '#17100a'); ctx.fillStyle = bg; rr(ctx, x0, y0, barW, 86, 10); ctx.fill(); ctx.fillStyle = PANPAT; ctx.globalAlpha = .6; ctx.fill(); ctx.globalAlpha = 1;
   ctx.strokeStyle = '#8a6a2a'; ctx.lineWidth = 3; rr(ctx, x0, y0, barW, 86, 10); ctx.stroke();
   region(x0, y0 - 20, barW, 112, { block: true });
-  orb(x0 + orbR + 10, VH - 58, orbR, p.hp, p.maxhp, '#ff5050', '#7a0a0a', Math.ceil(p.hp));
-  orb(x0 + barW - orbR - 10, VH - 58, orbR, p.mp, p.maxmp, '#5aa8ff', '#0c2a7a', Math.ceil(p.mp));
+  const orbY = mob ? VH - 44 : VH - 58;
+  orb(x0 + orbR + 10, orbY, orbR, p.hp, p.maxhp, '#ff5050', '#7a0a0a', Math.ceil(p.hp));
+  orb(x0 + barW - orbR - 10, orbY, orbR, p.mp, p.maxmp, '#5aa8ff', '#0c2a7a', Math.ceil(p.mp));
   const xp0 = cx - sw / 2, xy = y0 + 9, f = p.xp / needXp(p.lvl);
   ctx.fillStyle = '#000'; ctx.fillRect(xp0, xy, sw, 9);
   const xg = ctx.createLinearGradient(0, xy, 0, xy + 9); xg.addColorStop(0, '#ffe58a'); xg.addColorStop(1, '#c98a14'); ctx.fillStyle = xg; ctx.fillRect(xp0, xy, sw * f, 9);
@@ -2958,16 +3113,32 @@ function hud() {
     ctx.strokeStyle = '#c99a3a'; ctx.lineWidth = 1.5; ctx.strokeRect(x + .5, sy + .5, ss - 1, ss - 1); T_(String(i + 1), x + 4, sy + 11, '#ffe9a8', 10, 'left', true);
     region(x, sy, ss, ss, { l: fn, tip, block: true });
   });
-  [['inv', 'Envanter (I)'], ['chr', 'Karakter (C)'], ['skl', 'Yetenekler (K)'], ['clan', 'Klan (L)'], ['daily', 'Günlük (G)']].forEach((b, i) => {
-    const x = VW - 12 - (6 - i) * 46, y = VH - 52; const open = wins[b[0]].open; ctx.fillStyle = open ? '#6a4a1a' : '#2a1c0f'; rr(ctx, x, y, 40, 40, 6); ctx.fill(); ctx.strokeStyle = open ? '#ffd66b' : '#8a6a2a'; ctx.lineWidth = 2; ctx.stroke();
-    T_(b[0].charAt(0).toUpperCase(), x + 20, y + 25, '#ffe29a', 14, 'center', true);
-    if (b[0] === 'skl' && p.skp > 0) { ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.arc(x + 34, y + 6, 7, 0, 7); ctx.fill(); T_(String(p.skp), x + 34, y + 10, '#fff', 10, 'center', true); }
-    if (b[0] === 'clan' && p.clan) { ctx.fillStyle = '#fbbf24'; ctx.beginPath(); ctx.arc(x + 34, y + 6, 7, 0, 7); ctx.fill(); T_(String(p.clan.level), x + 34, y + 10, '#000', 10, 'center', true); }
-    region(x, y, 40, 40, { l: () => toggleWin(b[0]), block: true });
-  });
-  const vbX = VW - 12 - 6 * 46, vbY = VH - 52;
-  micIcon(vbX, vbY, 40, VOICE.on, VOICE.speaking);
-  region(vbX, vbY, 40, 40, { l: () => { toggleVoice(); }, r: () => { VOICE.panel = true; SFX.click(); }, block: true });
+  if (mob) {
+    const bs = 34, bg2 = 4, by2 = 10;
+    [['inv', 'E'], ['chr', 'K'], ['skl', 'Y'], ['clan', 'L'], ['daily', 'G']].forEach((b, i) => {
+      const x = 10 + i * (bs + bg2), y = by2; const open = wins[b[0]].open;
+      ctx.fillStyle = open ? '#6a4a1a' : 'rgba(42,28,15,.85)'; rr(ctx, x, y, bs, bs, 5); ctx.fill();
+      ctx.strokeStyle = open ? '#ffd66b' : '#8a6a2a'; ctx.lineWidth = 1.6; ctx.stroke();
+      T_(b[1], x + bs / 2, y + bs / 2 + 5, '#ffe29a', 13, 'center', true);
+      if (b[0] === 'skl' && p.skp > 0) { ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.arc(x + bs - 4, y + 4, 6, 0, 7); ctx.fill(); T_(String(p.skp), x + bs - 4, y + 7, '#fff', 9, 'center', true); }
+      if (b[0] === 'clan' && p.clan) { ctx.fillStyle = '#fbbf24'; ctx.beginPath(); ctx.arc(x + bs - 4, y + 4, 6, 0, 7); ctx.fill(); T_(String(p.clan.level), x + bs - 4, y + 7, '#000', 9, 'center', true); }
+      region(x, y, bs, bs, { l: () => toggleWin(b[0]), block: true });
+    });
+    const vbX = 10 + 5 * (bs + bg2), vbY = by2;
+    micIcon(vbX, vbY, bs, VOICE.on, VOICE.speaking);
+    region(vbX, vbY, bs, bs, { l: () => { toggleVoice(); }, r: () => { VOICE.panel = true; SFX.click(); }, block: true });
+  } else {
+    [['inv', 'Envanter (I)'], ['chr', 'Karakter (C)'], ['skl', 'Yetenekler (K)'], ['clan', 'Klan (L)'], ['daily', 'Günlük (G)']].forEach((b, i) => {
+      const x = VW - 12 - (6 - i) * 46, y = VH - 52; const open = wins[b[0]].open; ctx.fillStyle = open ? '#6a4a1a' : '#2a1c0f'; rr(ctx, x, y, 40, 40, 6); ctx.fill(); ctx.strokeStyle = open ? '#ffd66b' : '#8a6a2a'; ctx.lineWidth = 2; ctx.stroke();
+      T_(b[0].charAt(0).toUpperCase(), x + 20, y + 25, '#ffe29a', 14, 'center', true);
+      if (b[0] === 'skl' && p.skp > 0) { ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.arc(x + 34, y + 6, 7, 0, 7); ctx.fill(); T_(String(p.skp), x + 34, y + 10, '#fff', 10, 'center', true); }
+      if (b[0] === 'clan' && p.clan) { ctx.fillStyle = '#fbbf24'; ctx.beginPath(); ctx.arc(x + 34, y + 6, 7, 0, 7); ctx.fill(); T_(String(p.clan.level), x + 34, y + 10, '#000', 10, 'center', true); }
+      region(x, y, 40, 40, { l: () => toggleWin(b[0]), block: true });
+    });
+    const vbX = VW - 12 - 6 * 46, vbY = VH - 52;
+    micIcon(vbX, vbY, 40, VOICE.on, VOICE.speaking);
+    region(vbX, vbY, 40, 40, { l: () => { toggleVoice(); }, r: () => { VOICE.panel = true; SFX.click(); }, block: true });
+  }
 
   const ms = MINIMAP.size, mx = VW - ms - 12, my = 12;
   if (MINIMAP.open) {
@@ -2977,7 +3148,14 @@ function hud() {
     ctx.drawImage(MMBG, mx, my, ms, ms);
     ctx.save(); ctx.beginPath(); ctx.rect(mx, my, ms, ms); ctx.clip();
     const px = mx + p.x * k, py = my + p.y * k;
-    monsters.forEach(m => { if (m.dead) return; const sx = mx + m.x * k, sy = my + m.y * k; if (sx < mx || sx > mx + ms || sy < my || sy > my + ms) return; ctx.fillStyle = m.boss ? '#ff2222' : '#ef4444'; ctx.beginPath(); ctx.arc(sx, sy, m.boss ? 3.2 : 1.8, 0, 7); ctx.fill(); });
+    monsters.forEach(m => {
+      if (m.dead) return;
+      if (Math.abs(m.x - p.x) > 3000 || Math.abs(m.y - p.y) > 3000) return;
+      const sx = mx + m.x * k, sy = my + m.y * k;
+      if (sx < mx || sx > mx + ms || sy < my || sy > my + ms) return;
+      ctx.fillStyle = m.boss ? '#ff2222' : '#ef4444';
+      ctx.beginPath(); ctx.arc(sx, sy, m.boss ? 3.2 : 1.8, 0, 7); ctx.fill();
+    });
     remotePlayers.forEach(rp => { const sx = mx + rp.x * k, sy = my + rp.y * k; ctx.fillStyle = '#7dd3fc'; ctx.beginPath(); ctx.arc(sx, sy, 2.8, 0, 7); ctx.fill(); });
     DUNGEONS.forEach(d => { const sx = mx + d.portalX * k, sy = my + d.portalY * k; ctx.fillStyle = d.color; ctx.beginPath(); ctx.arc(sx, sy, 3.5, 0, 7); ctx.fill(); });
     p.lands.forEach(L => { const sx = mx + L.x * k, sy = my + L.y * k; ctx.fillStyle = '#86efac'; ctx.beginPath(); ctx.arc(sx, sy, 3.2, 0, 7); ctx.fill(); });
@@ -2997,14 +3175,33 @@ function hud() {
     ctx.strokeStyle = '#e3b755'; ctx.lineWidth = 1.5; ctx.stroke();
     region(bx, by, 28, 28, { l: () => { MINIMAP.open = true; SFX.click(); }, block: true });
   }
-  let statusY = 12;
-  if (p.clan) { ctx.fillStyle = 'rgba(0,0,0,.55)'; rr(ctx, 10, statusY, 210, 22, 4); ctx.fill(); ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 1.2; ctx.stroke(); T_('🏰 ' + p.clan.name + ' Lv.' + p.clan.level, 16, statusY + 15, '#fbbf24', 11, 'left', true); statusY += 26; }
-  if (p.lands.length) { let gR = 0; p.lands.forEach(L => gR += L.tier * 2); ctx.fillStyle = 'rgba(0,0,0,.55)'; rr(ctx, 10, statusY, 210, 22, 4); ctx.fill(); ctx.strokeStyle = '#86efac'; ctx.lineWidth = 1.2; ctx.stroke(); T_('🏞️ ' + p.lands.length + ' bölge · +' + gR + ' Yang/s', 16, statusY + 15, '#86efac', 11, 'left', true); statusY += 26; }
-  const chx = 10, chh = 168, chy = VH - chh - 10, chw = Math.min(400, Math.max(260, cx - barW / 2 - 24));
-  ctx.fillStyle = 'rgba(0,0,0,.45)'; rr(ctx, chx, chy, chw, chh, 6); ctx.fill(); ctx.strokeStyle = 'rgba(138,106,42,.8)'; ctx.lineWidth = 1.5; ctx.stroke(); region(chx, chy, chw, chh, { block: true });
-  ctx.save(); ctx.beginPath(); ctx.rect(chx, chy, chw, chh); ctx.clip(); const lines = chat.slice(-9); lines.forEach((c, i) => { const yy = chy + 18 + i * 15; ctx.font = '12px Georgia'; ctx.textAlign = 'left'; if (c.n) { T_(c.n + ':', chx + 8, yy, c.c, 12, 'left', true); const w2 = ctx.measureText(c.n + ': ').width; T_(c.t, chx + 8 + w2, yy, '#e8e0cc', 12); } else T_(c.t, chx + 8, yy, c.c, 12); }); ctx.restore();
-  T_(chatMode ? chatBuf + '|' : 'Enter: sohbet · V: ses · L: klan · Shift: atıl', chx + 10, chy + chh - 9, chatMode ? '#fff' : '#7c6f55', 11);
+  if (!mob) {
+    let statusY = 12;
+    if (p.clan) { ctx.fillStyle = 'rgba(0,0,0,.55)'; rr(ctx, 10, statusY, 210, 22, 4); ctx.fill(); ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 1.2; ctx.stroke(); T_('🏰 ' + p.clan.name + ' Lv.' + p.clan.level, 16, statusY + 15, '#fbbf24', 11, 'left', true); statusY += 26; }
+    if (p.lands.length) { let gR = 0; p.lands.forEach(L => gR += L.tier * 2); ctx.fillStyle = 'rgba(0,0,0,.55)'; rr(ctx, 10, statusY, 210, 22, 4); ctx.fill(); ctx.strokeStyle = '#86efac'; ctx.lineWidth = 1.2; ctx.stroke(); T_('🏞️ ' + p.lands.length + ' bölge · +' + gR + ' Yang/s', 16, statusY + 15, '#86efac', 11, 'left', true); statusY += 26; }
+  }
+  if (mob) {
+    const chx = 10, chh = 58, chy = 52, chw = Math.min(VW - 20, 340);
+    ctx.fillStyle = 'rgba(0,0,0,.55)'; rr(ctx, chx, chy, chw, chh, 5); ctx.fill();
+    ctx.strokeStyle = 'rgba(138,106,42,.6)'; ctx.lineWidth = 1; ctx.stroke();
+    region(chx, chy, chw, chh, { block: true });
+    ctx.save(); ctx.beginPath(); ctx.rect(chx, chy, chw, chh); ctx.clip();
+    const lines = chat.slice(-3);
+    lines.forEach((c, i) => {
+      const yy = chy + 16 + i * 15;
+      ctx.font = '11px Georgia'; ctx.textAlign = 'left';
+      if (c.n) { T_(c.n + ':', chx + 6, yy, c.c, 11, 'left', true); const w2 = ctx.measureText(c.n + ': ').width; T_(c.t, chx + 6 + w2, yy, '#e8e0cc', 11); }
+      else T_(c.t, chx + 6, yy, c.c, 11);
+    });
+    ctx.restore();
+  } else {
+    const chx = 10, chh = 168, chy = VH - chh - 10, chw = Math.min(400, Math.max(260, cx - barW / 2 - 24));
+    ctx.fillStyle = 'rgba(0,0,0,.45)'; rr(ctx, chx, chy, chw, chh, 6); ctx.fill(); ctx.strokeStyle = 'rgba(138,106,42,.8)'; ctx.lineWidth = 1.5; ctx.stroke(); region(chx, chy, chw, chh, { block: true });
+    ctx.save(); ctx.beginPath(); ctx.rect(chx, chy, chw, chh); ctx.clip(); const lines = chat.slice(-9); lines.forEach((c, i) => { const yy = chy + 18 + i * 15; ctx.font = '12px Georgia'; ctx.textAlign = 'left'; if (c.n) { T_(c.n + ':', chx + 8, yy, c.c, 12, 'left', true); const w2 = ctx.measureText(c.n + ': ').width; T_(c.t, chx + 8 + w2, yy, '#e8e0cc', 12); } else T_(c.t, chx + 8, yy, c.c, 12); }); ctx.restore();
+    T_(chatMode ? chatBuf + '|' : 'Enter: sohbet · V: ses · L: klan · Shift: atıl', chx + 10, chy + chh - 9, chatMode ? '#fff' : '#7c6f55', 11);
+  }
   if (banner) { const a = clamp(banner.l, 0, 1); ctx.globalAlpha = a; ctx.font = 'bold 34px Georgia'; ctx.textAlign = 'center'; ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(0,0,0,.9)'; ctx.strokeText(banner.t, cx, VH * .26); ctx.fillStyle = banner.c; ctx.fillText(banner.t, cx, VH * .26); ctx.globalAlpha = 1; }
+  if (mob) drawTouchUI();
 }
 function windows() {
   for (const k of order) { const w = wins[k]; if (!w.open) continue; w.x = clamp(w.x, -w.w + 80, VW - 80); w.y = clamp(w.y, 0, VH - 40); panel(k); WIN[k](w); }
@@ -3101,9 +3298,12 @@ function startGame(name, cls, king, saved) {
   newChar(name, cls, king, saved); initWorld();
   checkDaily();
   cam.x = p.x - VW / 2; cam.y = p.y - VH / 2; started = true; last = performance.now();
+  if (IS_MOBILE) { MINIMAP.open = false; MINIMAP.size = 100; }
   try { ac(); initMusic(); initAmbient(); applyAudioSettings(); refreshVoiceDevices(); } catch(e){}
   connectToServer();
   document.getElementById('menu').style.display = 'none';
+  document.body.classList.add('playing');
+  updateTouchLayout();
 }
 function initMenu() {
   const cards = document.getElementById('cards'), kings = document.getElementById('kings'), prevs = [];
